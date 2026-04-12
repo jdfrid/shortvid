@@ -4,7 +4,8 @@ services:
     runtime: node
     plan: free
     healthCheckPath: /api/health
-    buildCommand: "cd frontend && npm install && npx --yes vite build && cd ../backend && npm install"
+    # NODE_ENV=production skips devDependencies; Vite lives in devDependencies — must install it for build.
+    buildCommand: "cd frontend && npm install --include=dev && npx --yes vite build && cd ../backend && npm install"
     startCommand: "node backend/src/index.js"
     envVars:
       - key: NODE_VERSION

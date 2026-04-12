@@ -6,21 +6,12 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function getDataDir() {
-  const persistentPath = '/app/backend/data';
-  const localPath = path.join(__dirname, '../../data');
-
-  if (process.env.NODE_ENV === 'production') {
-    try {
-      if (fs.existsSync(persistentPath)) return persistentPath;
-      fs.mkdirSync(persistentPath, { recursive: true });
-      return persistentPath;
-    } catch {
-      const fallbackPath = path.join(__dirname, '../../data');
-      if (!fs.existsSync(fallbackPath)) fs.mkdirSync(fallbackPath, { recursive: true });
-      return fallbackPath;
-    }
+  const fromEnv = (process.env.SHORTVID_DATA_DIR || '').trim();
+  if (fromEnv) {
+    if (!fs.existsSync(fromEnv)) fs.mkdirSync(fromEnv, { recursive: true });
+    return fromEnv;
   }
-
+  const localPath = path.join(__dirname, '../../data');
   if (!fs.existsSync(localPath)) fs.mkdirSync(localPath, { recursive: true });
   return localPath;
 }
