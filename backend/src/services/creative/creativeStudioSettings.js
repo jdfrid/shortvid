@@ -4,6 +4,7 @@ import { prepare } from '../../config/database.js';
 export const CREATIVE_STUDIO_SETTING_KEYS = [
   'creative_llm_provider',
   'creative_gemini_api_key',
+  'creative_pexels_api_key',
   'creative_gemini_model',
   'creative_openai_api_key',
   'creative_openai_model',

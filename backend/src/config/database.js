@@ -74,6 +74,7 @@ export async function initDatabase() {
   const defaults = [
     ['creative_llm_provider', 'template'],
     ['creative_gemini_api_key', ''],
+    ['creative_pexels_api_key', ''],
     ['creative_gemini_model', 'gemini-2.0-flash'],
     ['creative_openai_api_key', ''],
     ['creative_openai_model', 'gpt-4o-mini'],

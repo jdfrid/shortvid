@@ -89,6 +89,14 @@ class ApiService {
     return this.request('/creative/status');
   }
 
+  /** @param {string} [apiKey] if set, test this key only (before save) */
+  async testPexelsKey(apiKey) {
+    return this.request('/creative/pexels/test', {
+      method: 'POST',
+      body: JSON.stringify(apiKey ? { apiKey } : {})
+    });
+  }
+
   async getCreativeVideoJobs(limit = 40) {
     return this.request(`/creative/jobs?limit=${limit}`);
   }
