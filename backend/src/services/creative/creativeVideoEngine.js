@@ -37,7 +37,9 @@ function pexelsSearchOptsFromSettings(studioSettings) {
 
 export function assertCreativePipelineReady() {
   if (!isPexelsConfigured()) {
-    throw new Error('Pexels is not configured — set PEXELS_API_KEY on the server');
+    throw new Error(
+      'Pexels is not configured — set PEXELS_API_KEY on the server or save a key in Studio settings'
+    );
   }
   const provider = (setting('creative_video_provider', 'shotstack') || 'shotstack').toLowerCase();
   if (provider === 'shotstack' && !isShotstackConfigured()) {
