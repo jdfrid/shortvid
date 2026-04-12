@@ -84,7 +84,11 @@ export async function initDatabase() {
       'creative_auto_description',
       'Short vertical video: practical tips about shopping smart and spotting real value online.'
     ],
-    ['creative_auto_tone', 'adults']
+    ['creative_auto_tone', 'adults'],
+    ['creative_pexels_per_page', '6'],
+    ['creative_pexels_orientation', 'portrait'],
+    ['creative_pexels_timeout_sec', '45'],
+    ['creative_pexels_prefer_quality', 'hd']
   ];
   for (const [key, value] of defaults) {
     db.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [key, value]);

@@ -26,7 +26,11 @@ const SETTINGS_PAYLOAD_KEYS = [
   'creative_video_auto_enabled',
   'creative_video_cron',
   'creative_auto_description',
-  'creative_auto_tone'
+  'creative_auto_tone',
+  'creative_pexels_per_page',
+  'creative_pexels_orientation',
+  'creative_pexels_timeout_sec',
+  'creative_pexels_prefer_quality'
 ];
 
 export default function CreativeStudio() {
@@ -57,6 +61,10 @@ export default function CreativeStudio() {
     creative_auto_description:
       'Short vertical video: practical tips about shopping smart and spotting real value online.',
     creative_auto_tone: 'adults',
+    creative_pexels_per_page: '6',
+    creative_pexels_orientation: 'portrait',
+    creative_pexels_timeout_sec: '45',
+    creative_pexels_prefer_quality: 'hd',
     creative_openai_key_configured: false,
     creative_gemini_key_configured: false
   });
@@ -485,8 +493,57 @@ export default function CreativeStudio() {
             <h3 className="text-sm font-semibold text-gold-300">Pexels → Shotstack</h3>
             <p className="text-xs text-midnight-400" dir="rtl">
               <code className="text-midnight-300">PEXELS_API_KEY</code>, <code className="text-midnight-300">SHOTSTACK_API_KEY</code>{' '}
-              בסביבת השרת (למשל Render).
+              בסביבת השרת (למשל Render). להלן אפשרויות החיפוש ב-Pexels (נשמרות במסד).
             </p>
+            <div className="grid sm:grid-cols-2 gap-4 pt-2 border-t border-midnight-700/80">
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1">תוצאות לחיפוש (per page)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={15}
+                  className="input-dark w-full max-w-[8rem] font-mono"
+                  value={settings.creative_pexels_per_page || '6'}
+                  onChange={e => setSettings({ ...settings, creative_pexels_per_page: e.target.value })}
+                />
+                <p className="text-xs text-midnight-500 mt-1">1–15 (ברירת מחדל API)</p>
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1">כיוון וידאו</label>
+                <select
+                  className="input-dark w-full max-w-xs"
+                  value={settings.creative_pexels_orientation || 'portrait'}
+                  onChange={e => setSettings({ ...settings, creative_pexels_orientation: e.target.value })}
+                >
+                  <option value="portrait">אנכי (portrait)</option>
+                  <option value="landscape">אופקי (landscape)</option>
+                  <option value="square">מרובע (square)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1">Timeout חיפוש (שניות)</label>
+                <input
+                  type="number"
+                  min={5}
+                  max={120}
+                  className="input-dark w-full max-w-[8rem] font-mono"
+                  value={settings.creative_pexels_timeout_sec || '45'}
+                  onChange={e => setSettings({ ...settings, creative_pexels_timeout_sec: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1">עדיפות איכות קובץ</label>
+                <select
+                  className="input-dark w-full max-w-xs"
+                  value={settings.creative_pexels_prefer_quality || 'hd'}
+                  onChange={e => setSettings({ ...settings, creative_pexels_prefer_quality: e.target.value })}
+                >
+                  <option value="hd">HD (אז SD)</option>
+                  <option value="sd">SD (אז HD)</option>
+                  <option value="any">כל קישור זמין</option>
+                </select>
+              </div>
+            </div>
             <div>
               <label className="block text-sm text-midnight-300 mb-1">ספק רינדור</label>
               <select

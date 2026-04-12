@@ -21,6 +21,20 @@ function setting(key, fallback = '') {
   return (row?.value ?? fallback).trim();
 }
 
+/** @param {Record<string, string>} studioSettings — from getCreativeStudioSettings() */
+function pexelsSearchOptsFromSettings(studioSettings) {
+  const s = studioSettings || {};
+  const per = parseInt(String(s.creative_pexels_per_page || '6'), 10);
+  const perPage = Math.min(15, Math.max(1, Number.isFinite(per) ? per : 6));
+  let orientation = String(s.creative_pexels_orientation || 'portrait').toLowerCase();
+  if (!['portrait', 'landscape', 'square'].includes(orientation)) orientation = 'portrait';
+  const sec = parseInt(String(s.creative_pexels_timeout_sec || '45'), 10);
+  const timeoutMs = Math.min(120, Math.max(5, Number.isFinite(sec) ? sec : 45)) * 1000;
+  let preferQuality = String(s.creative_pexels_prefer_quality || 'hd').toLowerCase();
+  if (!['hd', 'sd', 'any'].includes(preferQuality)) preferQuality = 'hd';
+  return { perPage, orientation, timeoutMs, preferQuality };
+}
+
 export function assertCreativePipelineReady() {
   if (!isPexelsConfigured()) {
     throw new Error('Pexels is not configured — set PEXELS_API_KEY on the server');
@@ -87,11 +101,12 @@ export async function processCreativeVideoJob(jobId) {
       userNotes: row.user_notes || ''
     });
 
+    const pexelsOpts = pexelsSearchOptsFromSettings(settings);
     const queries = brief.pexels_search_queries.map(q => String(q).trim()).filter(Boolean);
     const videoUrls = [];
     const seen = new Set();
     for (const q of queries.slice(0, 4)) {
-      const batch = await searchVideoUrls(q, { perPage: 5, orientation: 'portrait' });
+      const batch = await searchVideoUrls(q, pexelsOpts);
       for (const u of batch) {
         if (!seen.has(u)) {
           seen.add(u);
@@ -103,7 +118,9 @@ export async function processCreativeVideoJob(jobId) {
     }
 
     if (!videoUrls.length) {
-      throw new Error('Pexels returned no usable portrait videos for these queries');
+      throw new Error(
+        `Pexels returned no usable ${pexelsOpts.orientation} videos for these queries`
+      );
     }
 
     let char = row.character_id ? getCharacterById(row.character_id) : null;

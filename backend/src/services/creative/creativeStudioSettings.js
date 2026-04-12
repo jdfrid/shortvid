@@ -11,7 +11,11 @@ export const CREATIVE_STUDIO_SETTING_KEYS = [
   'creative_video_auto_enabled',
   'creative_video_cron',
   'creative_auto_description',
-  'creative_auto_tone'
+  'creative_auto_tone',
+  'creative_pexels_per_page',
+  'creative_pexels_orientation',
+  'creative_pexels_timeout_sec',
+  'creative_pexels_prefer_quality'
 ];
 
 export function getCreativeStudioSettings() {
