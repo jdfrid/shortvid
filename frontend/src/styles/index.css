@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  background: #0f1219;
+  color: #eceef2;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.input-dark {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #eceef2;
+  padding: 0.875rem 1rem;
+  border-radius: 10px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input-dark:focus {
+  outline: none;
+  border-color: #d4912e;
+  box-shadow: 0 0 0 3px rgba(212, 145, 46, 0.15);
+}
+
+.input-dark::placeholder {
+  color: #667792;
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.btn-gold {
+  background: linear-gradient(135deg, #d4912e 0%, #c27523 100%);
+  color: #0f1219;
+  font-weight: 600;
+  padding: 0.875rem 2rem;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn-gold:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px rgba(212, 145, 46, 0.25);
+}
+
+.btn-gold:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+select option {
+  background: #1a1f2e;
+  color: #eceef2;
+}

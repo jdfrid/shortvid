@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: shortvid
+    runtime: node
+    plan: free
+    healthCheckPath: /api/health
+    buildCommand: "cd frontend && npm install && npx --yes vite build && cd ../backend && npm install"
+    startCommand: "node backend/src/index.js"
+    envVars:
+      - key: NODE_VERSION
+        value: "18.19.0"
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: PEXELS_API_KEY
+        sync: false
+      - key: SHOTSTACK_API_KEY
+        sync: false
+      - key: SHOTSTACK_HOST
+        sync: false
+      - key: SHOTSTACK_EDIT_VERSION
+        sync: false

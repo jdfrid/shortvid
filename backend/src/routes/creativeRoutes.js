@@ -1,0 +1,152 @@
+import express from 'express';
+import { prepare } from '../config/database.js';
+import {
+  isCreativeEngineBusy,
+  startNewCreativeVideoJob,
+  retryCreativeVideoJob
+} from '../services/creative/creativeVideoEngine.js';
+import { getCharacters, SCRIPT_TONES } from '../services/creative/creativeAssets.js';
+import { isPexelsConfigured } from '../services/creative/pexelsService.js';
+import { isShotstackConfigured } from '../services/creative/shotstackRenderService.js';
+import {
+  getCreativeStudioSettings,
+  CREATIVE_STUDIO_SETTING_KEYS
+} from '../services/creative/creativeStudioSettings.js';
+import scheduler from '../services/scheduler.js';
+
+const router = express.Router();
+
+router.get('/settings', (req, res) => {
+  try {
+    const raw = getCreativeStudioSettings();
+    const openaiKey = (raw.creative_openai_api_key || '').trim();
+    const geminiKey = (raw.creative_gemini_api_key || '').trim();
+    const safe = { ...raw };
+    delete safe.creative_openai_api_key;
+    delete safe.creative_gemini_api_key;
+    safe.creative_openai_key_configured = openaiKey.length > 0;
+    safe.creative_gemini_key_configured = geminiKey.length > 0;
+    res.json(safe);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.put('/settings', (req, res) => {
+  try {
+    const body = req.body || {};
+    let cronChanged = false;
+    for (const key of CREATIVE_STUDIO_SETTING_KEYS) {
+      if (body[key] === undefined) continue;
+      if (key === 'creative_openai_api_key' || key === 'creative_gemini_api_key') {
+        const v = String(body[key] || '').trim();
+        if (!v) continue;
+        prepare(`
+          INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+        `).run(key, v);
+        continue;
+      }
+      prepare(`
+        INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+      `).run(key, String(body[key]));
+      if (key === 'creative_video_cron') cronChanged = true;
+    }
+    if (cronChanged) scheduler.rescheduleCreativeVideo();
+    res.json({ success: true });
+  } catch (e) {
+    console.error('shortvid settings:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/options', (req, res) => {
+  try {
+    res.json({ characters: getCharacters(), tones: SCRIPT_TONES });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/status', (req, res) => {
+  res.json({
+    busy: isCreativeEngineBusy(),
+    pexels_configured: isPexelsConfigured(),
+    shotstack_configured: isShotstackConfigured()
+  });
+});
+
+router.get('/jobs', (req, res) => {
+  try {
+    const limit = Math.min(80, Math.max(1, parseInt(req.query.limit || '40', 10)));
+    const rows = prepare(
+      `
+      SELECT id, status, trigger_source, video_description, script_tone, user_notes,
+             character_id, render_provider, external_render_id, output_url,
+             error_message, created_at, updated_at
+      FROM creative_video_jobs
+      ORDER BY id DESC
+      LIMIT ?
+    `
+    ).all(limit);
+    res.json({ jobs: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/jobs/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const row = prepare(`SELECT * FROM creative_video_jobs WHERE id = ?`).get(id);
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    let brief = null;
+    if (row.brief_json) {
+      try {
+        brief = JSON.parse(row.brief_json);
+      } catch {
+        brief = null;
+      }
+    }
+    let pexelsUrls = null;
+    if (row.pexels_urls_json) {
+      try {
+        pexelsUrls = JSON.parse(row.pexels_urls_json);
+      } catch {
+        pexelsUrls = null;
+      }
+    }
+    res.json({ job: { ...row, brief, pexels_urls: pexelsUrls } });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/jobs', async (req, res) => {
+  try {
+    const { videoDescription, scriptTone, userNotes, characterId } = req.body || {};
+    const { jobId } = await startNewCreativeVideoJob({
+      videoDescription,
+      scriptTone,
+      userNotes,
+      characterId,
+      triggerSource: 'manual'
+    });
+    res.json({ jobId, status: 'started' });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/jobs/:id/retry', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { jobId } = await retryCreativeVideoJob(id);
+    res.json({ jobId, status: 'started' });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+export default router;
