@@ -9,20 +9,15 @@ services:
     startCommand: "node backend/src/index.js"
     envVars:
       - key: NODE_VERSION
-        value: "18.19.0"
+        value: "18"
       - key: NODE_ENV
         value: production
+      # No manual paste: Render generates at deploy time (see Environment in dashboard if you need the value).
       - key: JWT_SECRET
-        sync: false
-      - key: ADMIN_EMAIL
-        sync: false
-      - key: ADMIN_PASSWORD
-        sync: false
+        generateValue: true
+      # Optional integrations — empty until you add keys under Service → Environment.
       - key: PEXELS_API_KEY
-        sync: false
+        value: ""
       - key: SHOTSTACK_API_KEY
-        sync: false
-      - key: SHOTSTACK_HOST
-        sync: false
-      - key: SHOTSTACK_EDIT_VERSION
-        sync: false
+        value: ""
+      # Shotstack defaults are in code (api.shotstack.io, v1); override only if needed.
