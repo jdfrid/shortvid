@@ -1,11 +1,10 @@
 /**
  * Shotstack Edit API — https://shotstack.io/docs/api/
- * Env: SHOTSTACK_API_KEY (required), SHOTSTACK_HOST optional (default api.shotstack.io), SHOTSTACK_EDIT_VERSION (default v1)
+ * API key: SHOTSTACK_API_KEY env, or creative_shotstack_api_key in DB (הגדרות סטודיו). Env wins.
+ * SHOTSTACK_HOST, SHOTSTACK_EDIT_VERSION — environment only (optional).
  */
 
-function apiKey() {
-  return (process.env.SHOTSTACK_API_KEY || '').trim();
-}
+import { prepare } from '../../config/database.js';
 
 function baseUrl() {
   const host = (process.env.SHOTSTACK_HOST || 'api.shotstack.io').replace(/^https?:\/\//, '');
@@ -13,8 +12,51 @@ function baseUrl() {
   return `https://${host}/edit/${ver}`;
 }
 
+/** @param {string} [override] non-empty = use only this (e.g. test before save) */
+export function resolveShotstackApiKey(override) {
+  const o = String(override || '').trim();
+  if (o) return o;
+  const env = (process.env.SHOTSTACK_API_KEY || '').trim();
+  if (env) return env;
+  const row = prepare('SELECT value FROM settings WHERE key = ?').get('creative_shotstack_api_key');
+  return String(row?.value || '').trim();
+}
+
 export function isShotstackConfigured() {
-  return apiKey().length > 0;
+  return resolveShotstackApiKey().length > 0;
+}
+
+/**
+ * Auth check: GET a non-existent render id — 404 means key accepted; 401/403 means bad key.
+ * @param {string} [optionalOverride]
+ */
+export async function testShotstackApiKey(optionalOverride) {
+  const key = resolveShotstackApiKey(optionalOverride);
+  if (!key) {
+    throw new Error(
+      'אין מפתח Shotstack — הגדר SHOTSTACK_API_KEY בסביבה או שמור מפתח בהגדרות הסטודיו.'
+    );
+  }
+  const fakeId = '00000000-0000-0000-0000-000000000001';
+  const res = await fetch(`${baseUrl()}/render/${encodeURIComponent(fakeId)}`, {
+    headers: {
+      Accept: 'application/json',
+      'x-api-key': key
+    },
+    signal: AbortSignal.timeout(15000)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401 || res.status === 403) {
+    throw new Error('מפתח Shotstack לא תקין או חסר הרשאה.');
+  }
+  if (res.status === 404 || res.status === 400) {
+    return { ok: true, note: 'auth_ok' };
+  }
+  if (res.ok) {
+    return { ok: true };
+  }
+  const msg = data?.message || JSON.stringify(data).slice(0, 240);
+  throw new Error(`Shotstack ${res.status}: ${msg}`);
 }
 
 /**
@@ -143,8 +185,12 @@ export function buildVerticalEdit(params) {
 }
 
 export async function submitRender(editPayload) {
-  const key = apiKey();
-  if (!key) throw new Error('SHOTSTACK_API_KEY is not set');
+  const key = resolveShotstackApiKey();
+  if (!key) {
+    throw new Error(
+      'SHOTSTACK_API_KEY is not set — add env var or save key in Studio settings'
+    );
+  }
 
   const res = await fetch(`${baseUrl()}/render`, {
     method: 'POST',
@@ -167,7 +213,7 @@ export async function submitRender(editPayload) {
 }
 
 export async function getRenderStatus(renderId) {
-  const key = apiKey();
+  const key = resolveShotstackApiKey();
   const res = await fetch(`${baseUrl()}/render/${encodeURIComponent(renderId)}`, {
     headers: {
       Accept: 'application/json',

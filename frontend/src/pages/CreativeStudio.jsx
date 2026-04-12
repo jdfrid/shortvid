@@ -67,12 +67,15 @@ export default function CreativeStudio() {
     creative_pexels_prefer_quality: 'hd',
     creative_openai_key_configured: false,
     creative_gemini_key_configured: false,
-    creative_pexels_key_configured: false
+    creative_pexels_key_configured: false,
+    creative_shotstack_key_configured: false
   });
   const [openaiKeyInput, setOpenaiKeyInput] = useState('');
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [pexelsKeyInput, setPexelsKeyInput] = useState('');
   const [pexelsTesting, setPexelsTesting] = useState(false);
+  const [shotstackKeyInput, setShotstackKeyInput] = useState('');
+  const [shotstackTesting, setShotstackTesting] = useState(false);
 
   const loadCreative = useCallback(async () => {
     const [st, jobs, opt] = await Promise.all([
@@ -131,6 +134,7 @@ export default function CreativeStudio() {
       if (openaiKeyInput.trim()) payload.creative_openai_api_key = openaiKeyInput.trim();
       if (geminiKeyInput.trim()) payload.creative_gemini_api_key = geminiKeyInput.trim();
       if (pexelsKeyInput.trim()) payload.creative_pexels_api_key = pexelsKeyInput.trim();
+      if (shotstackKeyInput.trim()) payload.creative_shotstack_api_key = shotstackKeyInput.trim();
       if (
         (settings.creative_llm_provider || 'template') === 'gemini' &&
         !geminiKeyInput.trim() &&
@@ -153,6 +157,7 @@ export default function CreativeStudio() {
       setOpenaiKeyInput('');
       setGeminiKeyInput('');
       setPexelsKeyInput('');
+      setShotstackKeyInput('');
       await loadSettings();
       setMessage({ type: 'ok', text: 'הגדרות הסטודיו נשמרו.' });
     } catch (e) {
@@ -497,8 +502,8 @@ export default function CreativeStudio() {
           <div className="border border-midnight-600 rounded-lg p-4 space-y-4 bg-midnight-900/20">
             <h3 className="text-sm font-semibold text-gold-300">Pexels → Shotstack</h3>
             <p className="text-xs text-midnight-400" dir="rtl">
-              מפתח Pexels: עדיפות ל־<code className="text-midnight-300">PEXELS_API_KEY</code> בסביבה (Render), אחרת המפתח
-              השמור כאן במסד. Shotstack נשאר ב־<code className="text-midnight-300">SHOTSTACK_API_KEY</code> בסביבה.
+              מפתחות: עדיפות ל־משתני סביבה (<code className="text-midnight-300">PEXELS_API_KEY</code>,{' '}
+              <code className="text-midnight-300">SHOTSTACK_API_KEY</code>), אחרת הערכים השמורים כאן במסד.
             </p>
             <div className="space-y-2 pt-2 border-t border-midnight-700/80">
               <label className="block text-sm text-midnight-300 mb-1">מפתח API של Pexels</label>
@@ -539,6 +544,45 @@ export default function CreativeStudio() {
                   }}
                 >
                   {pexelsTesting ? 'בודק…' : 'בדוק חיבור'}
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2 pt-2 border-t border-midnight-700/80">
+              <label className="block text-sm text-midnight-300 mb-1">מפתח API של Shotstack</label>
+              <p className="text-xs text-midnight-500 mb-1">
+                {settings.creative_shotstack_key_configured
+                  ? 'מפתח שמור — הדבק רק להחלפה.'
+                  : 'לא הוגדר במסד — אפשר להדביק כאן או להגדיר SHOTSTACK_API_KEY בסביבה.'}
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <input
+                  type="password"
+                  className="input-dark w-full font-mono text-sm flex-1"
+                  value={shotstackKeyInput}
+                  onChange={e => setShotstackKeyInput(e.target.value)}
+                  placeholder="הדבק מפתח לבדיקה / שמירה"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  className="px-4 py-2 rounded-lg border border-midnight-600 text-midnight-200 hover:bg-midnight-800 text-sm whitespace-nowrap"
+                  disabled={shotstackTesting}
+                  onClick={async () => {
+                    setMessage(null);
+                    setShotstackTesting(true);
+                    try {
+                      await api.testShotstackKey(shotstackKeyInput.trim() || undefined);
+                      setMessage({ type: 'ok', text: 'חיבור Shotstack תקין (מפתח התקבל).' });
+                      await loadCreative();
+                    } catch (e) {
+                      setMessage({ type: 'error', text: e.message });
+                    } finally {
+                      setShotstackTesting(false);
+                    }
+                  }}
+                >
+                  {shotstackTesting ? 'בודק…' : 'בדוק Shotstack'}
                 </button>
               </div>
             </div>

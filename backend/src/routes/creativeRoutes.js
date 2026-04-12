@@ -7,7 +7,7 @@ import {
 } from '../services/creative/creativeVideoEngine.js';
 import { getCharacters, SCRIPT_TONES } from '../services/creative/creativeAssets.js';
 import { isPexelsConfigured, testPexelsApiKey } from '../services/creative/pexelsService.js';
-import { isShotstackConfigured } from '../services/creative/shotstackRenderService.js';
+import { isShotstackConfigured, testShotstackApiKey } from '../services/creative/shotstackRenderService.js';
 import {
   getCreativeStudioSettings,
   CREATIVE_STUDIO_SETTING_KEYS
@@ -22,13 +22,16 @@ router.get('/settings', (req, res) => {
     const openaiKey = (raw.creative_openai_api_key || '').trim();
     const geminiKey = (raw.creative_gemini_api_key || '').trim();
     const pexelsKey = (raw.creative_pexels_api_key || '').trim();
+    const shotstackKey = (raw.creative_shotstack_api_key || '').trim();
     const safe = { ...raw };
     delete safe.creative_openai_api_key;
     delete safe.creative_gemini_api_key;
     delete safe.creative_pexels_api_key;
+    delete safe.creative_shotstack_api_key;
     safe.creative_openai_key_configured = openaiKey.length > 0;
     safe.creative_gemini_key_configured = geminiKey.length > 0;
     safe.creative_pexels_key_configured = pexelsKey.length > 0;
+    safe.creative_shotstack_key_configured = shotstackKey.length > 0;
     res.json(safe);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -44,7 +47,8 @@ router.put('/settings', (req, res) => {
       if (
         key === 'creative_openai_api_key' ||
         key === 'creative_gemini_api_key' ||
-        key === 'creative_pexels_api_key'
+        key === 'creative_pexels_api_key' ||
+        key === 'creative_shotstack_api_key'
       ) {
         const v = String(body[key] || '').trim();
         if (!v) continue;
@@ -88,6 +92,16 @@ router.post('/pexels/test', async (req, res) => {
   try {
     const apiKey = String(req.body?.apiKey || '').trim();
     const result = await testPexelsApiKey(apiKey || undefined);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/shotstack/test', async (req, res) => {
+  try {
+    const apiKey = String(req.body?.apiKey || '').trim();
+    const result = await testShotstackApiKey(apiKey || undefined);
     res.json(result);
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });

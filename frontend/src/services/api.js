@@ -97,6 +97,14 @@ class ApiService {
     });
   }
 
+  /** @param {string} [apiKey] if set, test this key only (before save) */
+  async testShotstackKey(apiKey) {
+    return this.request('/creative/shotstack/test', {
+      method: 'POST',
+      body: JSON.stringify(apiKey ? { apiKey } : {})
+    });
+  }
+
   async getCreativeVideoJobs(limit = 40) {
     return this.request(`/creative/jobs?limit=${limit}`);
   }

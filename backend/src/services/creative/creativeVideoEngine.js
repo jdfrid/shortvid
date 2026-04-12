@@ -43,7 +43,9 @@ export function assertCreativePipelineReady() {
   }
   const provider = (setting('creative_video_provider', 'shotstack') || 'shotstack').toLowerCase();
   if (provider === 'shotstack' && !isShotstackConfigured()) {
-    throw new Error('Shotstack is not configured — set SHOTSTACK_API_KEY on the server');
+    throw new Error(
+      'Shotstack is not configured — set SHOTSTACK_API_KEY on the server or save a key in Studio settings'
+    );
   }
   if (provider !== 'shotstack') {
     throw new Error(`Render provider "${provider}" is not implemented yet — use shotstack in Settings`);
