@@ -11,8 +11,6 @@ services:
         value: "18.19.0"
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: "10000"
       - key: JWT_SECRET
         sync: false
       - key: ADMIN_EMAIL
