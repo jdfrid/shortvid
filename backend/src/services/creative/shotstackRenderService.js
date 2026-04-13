@@ -67,7 +67,8 @@ export async function testShotstackApiKey(optionalOverride) {
  *   voice: string,
  *   scenes: { text: string, start_sec: number, duration_sec: number }[],
  *   characterImageUrl?: string | null,
- *   totalDurationSec: number
+ *   totalDurationSec: number,
+ *   includeVoiceover?: boolean
  * }} params
  */
 export function buildVerticalEdit(params) {
@@ -78,7 +79,8 @@ export function buildVerticalEdit(params) {
     voice,
     scenes,
     characterImageUrl,
-    totalDurationSec
+    totalDurationSec,
+    includeVoiceover = true
   } = params;
 
   const total = Math.min(60, Math.max(12, totalDurationSec));
@@ -152,22 +154,24 @@ export function buildVerticalEdit(params) {
     tracks.push({ clips: textClips });
   }
 
-  tracks.push({
-    clips: [
-      {
-        asset: {
-          type: 'text-to-speech',
-          text: narration.slice(0, 4500),
-          voice: voice || 'Matthew',
-          language: 'en-US',
-          volume: 1,
-          effect: 'fadeIn'
-        },
-        start: 0,
-        length: total
-      }
-    ]
-  });
+  if (includeVoiceover !== false) {
+    tracks.push({
+      clips: [
+        {
+          asset: {
+            type: 'text-to-speech',
+            text: narration.slice(0, 4500),
+            voice: voice || 'Matthew',
+            language: 'en-US',
+            volume: 1,
+            effect: 'fadeIn'
+          },
+          start: 0,
+          length: total
+        }
+      ]
+    });
+  }
 
   return {
     timeline: {

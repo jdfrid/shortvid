@@ -113,6 +113,10 @@ class ApiService {
     return this.request(`/creative/jobs/${id}`);
   }
 
+  async planCreativeVideo(body) {
+    return this.request('/creative/plan', { method: 'POST', body: JSON.stringify(body) });
+  }
+
   async createCreativeVideoJob(body) {
     return this.request('/creative/jobs', { method: 'POST', body: JSON.stringify(body) });
   }

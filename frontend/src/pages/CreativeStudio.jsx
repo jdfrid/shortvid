@@ -30,8 +30,54 @@ const SETTINGS_PAYLOAD_KEYS = [
   'creative_pexels_per_page',
   'creative_pexels_orientation',
   'creative_pexels_timeout_sec',
-  'creative_pexels_prefer_quality'
+  'creative_pexels_prefer_quality',
+  'creative_voice_mechanism'
 ];
+
+const MAX_ASSET_BYTES = 400 * 1024;
+
+async function filesToAssetPayloads(files, maxFiles = 8) {
+  const list = Array.from(files || []).slice(0, maxFiles);
+  const out = [];
+  for (const f of list) {
+    if (f.size > MAX_ASSET_BYTES) {
+      throw new Error(`הקובץ "${f.name}" גדול מדי (מקסימום ~${Math.round(MAX_ASSET_BYTES / 1024)}KB לקובץ)`);
+    }
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(new Error('קריאת קובץ נכשלה'));
+      r.readAsDataURL(f);
+    });
+    out.push({ name: f.name, mime: f.type || 'application/octet-stream', dataUrl });
+  }
+  return out;
+}
+
+async function singleAudioAsset(file) {
+  if (!file) return null;
+  const [one] = await filesToAssetPayloads([file], 1);
+  return one;
+}
+
+function urlTailLabel(u) {
+  if (!u || typeof u !== 'string') return '';
+  try {
+    const path = new URL(u).pathname;
+    const last = path.split('/').filter(Boolean).pop() || '';
+    return last.length > 64 ? `${last.slice(0, 64)}…` : last;
+  } catch {
+    const s = u.replace(/\?.*$/, '');
+    return s.length > 48 ? `…${s.slice(-48)}` : s;
+  }
+}
+
+function normalizeCreateJobId(res) {
+  const raw = res?.jobId ?? res?.job_id ?? res?.data?.jobId;
+  if (raw == null || raw === '') return null;
+  const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
+  return Number.isFinite(n) ? n : null;
+}
 
 export default function CreativeStudio() {
   const [tab, setTab] = useState('brief');
@@ -47,9 +93,27 @@ export default function CreativeStudio() {
   const [creativeTone, setCreativeTone] = useState('adults');
   const [creativeNotes, setCreativeNotes] = useState('');
   const [creativeCharacterId, setCreativeCharacterId] = useState('');
-  const [creativeStarting, setCreativeStarting] = useState(false);
   const [creativeDetail, setCreativeDetail] = useState(null);
   const [creativeRetryingId, setCreativeRetryingId] = useState(null);
+
+  const [scriptInstructions, setScriptInstructions] = useState('');
+  const [emphasis, setEmphasis] = useState('');
+  const [inspirationUrls, setInspirationUrls] = useState('');
+  const [inspirationFiles, setInspirationFiles] = useState([]);
+  const [illustrationFiles, setIllustrationFiles] = useState([]);
+  const [cameraFiles, setCameraFiles] = useState([]);
+  const [backgroundAudioFile, setBackgroundAudioFile] = useState(null);
+  const [prodLanguage, setProdLanguage] = useState('he');
+  const [prodGender, setProdGender] = useState('neutral');
+  const [prodEthnicity, setProdEthnicity] = useState('any');
+  const [prodAge, setProdAge] = useState('adult');
+  const [videoStyle, setVideoStyle] = useState('professional');
+
+  const [planDocument, setPlanDocument] = useState('');
+  const [editableBriefJson, setEditableBriefJson] = useState('');
+  const [hasPlanned, setHasPlanned] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const [creatingVideo, setCreatingVideo] = useState(false);
 
   const [settings, setSettings] = useState({
     creative_llm_provider: 'template',
@@ -65,6 +129,7 @@ export default function CreativeStudio() {
     creative_pexels_orientation: 'portrait',
     creative_pexels_timeout_sec: '45',
     creative_pexels_prefer_quality: 'hd',
+    creative_voice_mechanism: 'shotstack_tts',
     creative_openai_key_configured: false,
     creative_gemini_key_configured: false,
     creative_pexels_key_configured: false,
@@ -77,6 +142,9 @@ export default function CreativeStudio() {
   const [shotstackKeyInput, setShotstackKeyInput] = useState('');
   const [shotstackTesting, setShotstackTesting] = useState(false);
   const [loadedSettings, setLoadedSettings] = useState(null);
+  const [activeLogJobId, setActiveLogJobId] = useState(null);
+  const [activeLogJob, setActiveLogJob] = useState(null);
+  const [activeLogLoading, setActiveLogLoading] = useState(false);
 
   const loadCreative = useCallback(async () => {
     const [st, jobs, opt] = await Promise.all([
@@ -125,6 +193,33 @@ export default function CreativeStudio() {
     }, 4000);
     return () => clearInterval(id);
   }, [loadCreative]);
+
+  useEffect(() => {
+    if (!activeLogJobId) {
+      setActiveLogJob(null);
+      setActiveLogLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    const pull = async () => {
+      setActiveLogLoading(true);
+      try {
+        const d = await api.getCreativeVideoJob(activeLogJobId);
+        if (cancelled) return;
+        setActiveLogJob(d.job || null);
+        const st = String(d.job?.status || '').toLowerCase();
+        if (st === 'completed' || st === 'failed') setActiveLogLoading(false);
+      } catch {
+        if (!cancelled) setActiveLogLoading(false);
+      }
+    };
+    pull();
+    const id = setInterval(pull, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [activeLogJobId]);
 
   const saveStudioSettings = async () => {
     setSaving(true);
@@ -178,6 +273,120 @@ export default function CreativeStudio() {
       setMessage({ type: 'error', text: e.message });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const buildProductionPayload = useCallback(async () => {
+    const inspirationFilesPayload = await filesToAssetPayloads(inspirationFiles, 6);
+    const illustrationFilesPayload = await filesToAssetPayloads(illustrationFiles, 6);
+    const cameraPayload = await filesToAssetPayloads(cameraFiles, 4);
+    const backgroundAudio = await singleAudioAsset(backgroundAudioFile);
+    return {
+      scriptInstructions: scriptInstructions.trim(),
+      emphasis: emphasis.trim(),
+      inspirationUrls: inspirationUrls.trim(),
+      inspirationFiles: inspirationFilesPayload,
+      illustrationFiles: illustrationFilesPayload,
+      cameraCaptureFiles: cameraPayload,
+      backgroundAudio,
+      language: prodLanguage,
+      genderPresentation: prodGender,
+      ethnicityPresentation: prodEthnicity,
+      ageGroup: prodAge,
+      videoStyle
+    };
+  }, [
+    scriptInstructions,
+    emphasis,
+    inspirationUrls,
+    inspirationFiles,
+    illustrationFiles,
+    cameraFiles,
+    backgroundAudioFile,
+    prodLanguage,
+    prodGender,
+    prodEthnicity,
+    prodAge,
+    videoStyle
+  ]);
+
+  const handlePlanVideo = async () => {
+    setMessage(null);
+    setPlanning(true);
+    try {
+      if ((creativeDesc || '').trim().length < 8) {
+        setMessage({ type: 'error', text: 'תיאור הסרטון קצר מדי (לפחות 8 תווים).' });
+        return;
+      }
+      const production = await buildProductionPayload();
+      const res = await api.planCreativeVideo({
+        videoDescription: creativeDesc,
+        scriptTone: creativeTone,
+        userNotes: creativeNotes,
+        production
+      });
+      setPlanDocument(res.planDocument || '');
+      setEditableBriefJson(res.briefJson || JSON.stringify(res.brief, null, 2));
+      setHasPlanned(true);
+      setMessage({
+        type: 'ok',
+        text: 'נוצרה תכנית. ערכו את המסמך ו/או את ה-JSON, ואז לחצו ״צור סרטון״.'
+      });
+    } catch (e) {
+      setMessage({ type: 'error', text: e.message });
+    } finally {
+      setPlanning(false);
+    }
+  };
+
+  const handleCreateVideoJob = async () => {
+    setMessage(null);
+    setCreatingVideo(true);
+    try {
+      if ((creativeDesc || '').trim().length < 8) {
+        setMessage({ type: 'error', text: 'תיאור הסרטון קצר מדי.' });
+        return;
+      }
+      if (!hasPlanned || !(editableBriefJson || '').trim()) {
+        setMessage({ type: 'error', text: 'קודם לחצו ״תכנן את הסרטון״ וודאו שיש בריף JSON.' });
+        return;
+      }
+      try {
+        JSON.parse(editableBriefJson);
+      } catch {
+        setMessage({ type: 'error', text: 'ה-JSON של הבריף לא תקין — תקנו לפני שליחה.' });
+        return;
+      }
+      const production = await buildProductionPayload();
+      const started = await api.createCreativeVideoJob({
+        videoDescription: creativeDesc,
+        scriptTone: creativeTone,
+        userNotes: creativeNotes,
+        characterId: creativeCharacterId || undefined,
+        production,
+        planDocument,
+        approvedBriefJson: editableBriefJson.trim()
+      });
+      const newId = normalizeCreateJobId(started);
+      if (newId != null) {
+        setActiveLogJobId(newId);
+        try {
+          const d = await api.getCreativeVideoJob(newId);
+          setActiveLogJob(d.job || null);
+        } catch {
+          /* polling */
+        }
+      }
+      setMessage({
+        type: 'ok',
+        text: 'ה-job נשלח לתור לרינדור. הלוג משמאל מתעדכן אוטומטית.'
+      });
+      setCreativeBusy(true);
+      await loadCreative();
+    } catch (e) {
+      setMessage({ type: 'error', text: e.message });
+    } finally {
+      setCreatingVideo(false);
     }
   };
 
@@ -241,118 +450,538 @@ export default function CreativeStudio() {
       </div>
 
       {tab === 'brief' && (
-        <div className="glass rounded-xl p-6 space-y-4 max-w-3xl">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Sparkles className="text-gold-400" size={22} />
-            יצירת סרטון קצר
-          </h2>
-          <p className="text-sm text-midnight-400" dir="rtl">
-            בריף ייצור (תסריט, חיפושי B-roll, כיתובים), וידאו אנכי מ־
-            <a href="https://www.pexels.com/" className="text-gold-400 underline mx-0.5" target="_blank" rel="noreferrer">
-              Pexels
-            </a>
-            , רינדור ב־
-            <a href="https://shotstack.io/docs/api/" className="text-gold-400 underline mx-0.5" target="_blank" rel="noreferrer">
-              Shotstack
-            </a>
-            .
-          </p>
-          <div className="flex flex-wrap gap-3 text-xs">
-            <span className={creativeCfg.pexels_configured ? 'text-emerald-400' : 'text-amber-400'}>
-              Pexels: {creativeCfg.pexels_configured ? 'מוגדר' : 'חסר מפתח'}
-            </span>
-            <span className={creativeCfg.shotstack_configured ? 'text-emerald-400' : 'text-amber-400'}>
-              Shotstack: {creativeCfg.shotstack_configured ? 'מוגדר' : 'חסר מפתח'}
-            </span>
-          </div>
-          <div>
-            <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
-              1. תיאור הסרטון
-            </label>
-            <textarea
-              className="input-dark w-full min-h-[100px]"
-              dir="rtl"
-              value={creativeDesc}
-              onChange={e => setCreativeDesc(e.target.value)}
-              placeholder="למשל: טיפים לקנייה חכמה באונליין…"
-            />
-          </div>
-          <div className="grid sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
-                2. סגנון תסריט
-              </label>
-              <select className="input-dark w-full" value={creativeTone} onChange={e => setCreativeTone(e.target.value)}>
-                {(creativeOptions.tones || []).map(t => (
-                  <option key={t.id} value={t.id}>
-                    {t.label_he} ({t.id})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
-                דמות / תמונת פינה (אופציונלי)
-              </label>
-              <select
-                className="input-dark w-full"
-                value={creativeCharacterId}
-                onChange={e => setCreativeCharacterId(e.target.value)}
-              >
-                <option value="">ברירת מחדל</option>
-                {(creativeOptions.characters || []).map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
-              3. הערות והנחיות
-            </label>
-            <textarea
-              className="input-dark w-full min-h-[72px]"
-              dir="rtl"
-              value={creativeNotes}
-              onChange={e => setCreativeNotes(e.target.value)}
-              placeholder="קצב, שפה, מותג…"
-            />
-          </div>
-          <button
-            type="button"
-            className="btn-gold flex items-center gap-2 disabled:opacity-50"
-            disabled={creativeBusy || creativeStarting}
-            onClick={async () => {
-              setMessage(null);
-              setCreativeStarting(true);
-              try {
-                await api.createCreativeVideoJob({
-                  videoDescription: creativeDesc,
-                  scriptTone: creativeTone,
-                  userNotes: creativeNotes,
-                  characterId: creativeCharacterId || undefined
-                });
-                setMessage({
-                  type: 'ok',
-                  text: 'ה-job נשלח לתור. הרשימה מתעדכנת אוטומטית.'
-                });
-                setCreativeBusy(true);
-                await loadCreative();
-              } catch (e) {
-                setMessage({ type: 'error', text: e.message });
-              } finally {
-                setCreativeStarting(false);
-              }
-            }}
+        <div
+          dir="ltr"
+          className="grid grid-cols-1 md:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] gap-4 items-start"
+        >
+          <div
+            className="glass rounded-xl p-4 border-2 border-midnight-500/70 ring-1 ring-white/10 min-h-[280px] flex flex-col"
+            dir="rtl"
           >
-            <Sparkles size={18} />
-            {creativeStarting ? 'מתחיל…' : 'צור סרטון (ענן)'}
-          </button>
-          <p className="text-xs text-midnight-500" dir="rtl">
-            מקור התסריט: טאב <strong>הגדרות סטודיו</strong> (Template / Gemini / OpenAI).
-          </p>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="font-mono text-[11px] uppercase tracking-wide text-midnight-400">log:</span>
+              {activeLogLoading && <Loader className="animate-spin text-gold-400 shrink-0" size={16} />}
+            </div>
+
+            {(() => {
+              const job = activeLogJob;
+              const logBrief = job?.brief;
+              const logDebug = logBrief?.debug || {};
+              const provider = String(logDebug.llm_provider || settings.creative_llm_provider || 'template').toLowerCase();
+              const providerLabel =
+                provider === 'gemini' ? 'Gemini' : provider === 'openai' ? 'OpenAI' : 'Template (ללא LLM)';
+              const logQueries = logBrief?.pexels_search_queries || logDebug?.pexels_queries_used || [];
+              const timelineUrls =
+                Array.isArray(logDebug.selected_timeline_video_urls) && logDebug.selected_timeline_video_urls.length
+                  ? logDebug.selected_timeline_video_urls
+                  : Array.isArray(logDebug.pexels_timeline_urls)
+                    ? logDebug.pexels_timeline_urls
+                    : [];
+              const logCandidateUrls = logDebug.pexels_candidate_video_urls || job?.pexels_urls || [];
+              const logScenes = logBrief?.scenes || [];
+
+              const customerFromJob =
+                job && [job.video_description, job.user_notes].filter(Boolean).join('\n\n').trim();
+              const customerPreview = [creativeDesc, creativeNotes && `הערות: ${creativeNotes}`]
+                .filter(Boolean)
+                .join('\n\n')
+                .trim();
+              const customerBlock =
+                customerFromJob ||
+                customerPreview ||
+                '— (מלאו תיאור ולחצו ״צור סרטון״ — או ״הצג לוג של ה-job האחרון״ למטה)';
+
+              const narrationText =
+                logBrief?.narration ||
+                (!job && activeLogJobId != null
+                  ? 'טוען / ממתין לנתונים מהשרת…'
+                  : job && job.status === 'pending'
+                    ? 'ממתין בתור…'
+                    : job && job.status === 'processing'
+                      ? 'מעבד: תסריט / Pexels / Shotstack…'
+                      : '—');
+
+              const firstClipName = timelineUrls.length ? urlTailLabel(timelineUrls[0]) : '';
+
+              return (
+                <div className="text-xs space-y-4 flex-1 overflow-y-auto max-h-[75vh] pr-0.5">
+                  <section className="space-y-1">
+                    <h4 className="text-[11px] font-semibold text-gold-400">הוראות שנכתבו על ידי הלקוח</h4>
+                    <pre
+                      dir="auto"
+                      className="bg-midnight-950/90 rounded-md p-2.5 text-[11px] text-midnight-200 whitespace-pre-wrap max-h-40 overflow-y-auto border border-midnight-700/80"
+                    >
+                      {customerBlock}
+                    </pre>
+                  </section>
+
+                  <section className="space-y-1">
+                    <h4 className="text-[11px] font-semibold text-gold-400">
+                      תסריט שנכתב על ידי {providerLabel}
+                      {logDebug.llm_model ? ` · ${logDebug.llm_model}` : ''}
+                    </h4>
+                    {logDebug.fallback_from_llm && (
+                      <p className="text-amber-400 text-[10px] leading-snug">
+                        נפילה לתבנית ({String(logDebug.fallback_from_llm)}).
+                      </p>
+                    )}
+                    <pre
+                      dir="auto"
+                      className="bg-midnight-950/90 rounded-md p-2.5 text-[11px] text-midnight-200 whitespace-pre-wrap max-h-44 overflow-y-auto border border-midnight-700/80"
+                    >
+                      {narrationText}
+                    </pre>
+                    {logDebug.prompt_user_block && (
+                      <details className="text-[10px] text-midnight-500">
+                        <summary className="cursor-pointer text-midnight-400 hover:text-midnight-300">
+                          פרומפט מלא ל־LLM
+                        </summary>
+                        <pre dir="auto" className="mt-1 p-2 bg-midnight-900/60 rounded whitespace-pre-wrap max-h-32 overflow-y-auto">
+                          {logDebug.prompt_user_block}
+                        </pre>
+                      </details>
+                    )}
+                  </section>
+
+                  <section className="space-y-1">
+                    <h4 className="text-[11px] font-semibold text-gold-400">סרטון שנמצא במאגר (Pexels → טיימליין)</h4>
+                    {timelineUrls.length ? (
+                      <ul className="space-y-1.5 text-[11px] text-midnight-300">
+                        {timelineUrls.map((u, i) => (
+                          <li key={i} className="flex flex-col gap-0.5 border-b border-midnight-800/80 pb-1.5 last:border-0">
+                            <span className="font-mono text-midnight-400 truncate" title={u}>
+                              {urlTailLabel(u) || `clip_${i + 1}`}
+                            </span>
+                            <a href={u} className="text-gold-400/90 hover:underline break-all" target="_blank" rel="noreferrer">
+                              פתח מקור
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-midnight-500 text-[11px]">
+                        {job ? '— עדיין לא נבחרו קליפים (יעודכן אחרי Pexels).' : '—'}
+                      </p>
+                    )}
+                    {firstClipName ? (
+                      <p className="text-[10px] text-midnight-500">קליפ ראשון: {firstClipName}</p>
+                    ) : null}
+                  </section>
+
+                  <section className="space-y-1">
+                    <h4 className="text-[11px] font-semibold text-gold-400">מקורות נוספים</h4>
+                    {logQueries.length ? (
+                      <ul className="list-disc pr-4 text-midnight-400 space-y-0.5">
+                        {logQueries.map((q, i) => (
+                          <li key={i}>{q}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-midnight-500 text-[11px]">—</p>
+                    )}
+                    {Array.isArray(logDebug.pexels_pages_used) && logDebug.pexels_pages_used.length > 0 && (
+                      <ul className="mt-1 text-[10px] text-midnight-500 space-y-0.5 list-none">
+                        {logDebug.pexels_pages_used.map((row, i) => (
+                          <li key={i}>
+                            חיפוש עמוד {row.page}: {row.query}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {logCandidateUrls.length > 0 && (
+                      <details className="text-[10px] text-midnight-500">
+                        <summary className="cursor-pointer text-midnight-400">
+                          מועמדים מ־Pexels ({logCandidateUrls.length})
+                        </summary>
+                        <div className="mt-1 space-y-1 max-h-28 overflow-y-auto">
+                          {logCandidateUrls.slice(0, 12).map((u, i) => (
+                            <a
+                              key={i}
+                              href={u}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block text-gold-400/80 hover:underline truncate"
+                            >
+                              {i + 1}. {urlTailLabel(u)}
+                            </a>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                    {logDebug.character_image_url && (
+                      <a
+                        href={logDebug.character_image_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block text-gold-400/90 hover:underline truncate text-[10px] mt-1"
+                      >
+                        תמונת דמות בפינה
+                      </a>
+                    )}
+                  </section>
+
+                  <section className="space-y-1">
+                    <h4 className="text-[11px] font-semibold text-gold-400">כיתובים (scenes)</h4>
+                    {logScenes.length ? (
+                      <ul className="space-y-1 max-h-28 overflow-y-auto">
+                        {logScenes.map((s, i) => (
+                          <li key={i} className="text-[11px] text-midnight-300">
+                            [{s.start_sec}s / {s.duration_sec}s] {s.text}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-midnight-500 text-[11px]">—</p>
+                    )}
+                  </section>
+
+                  <section className="space-y-1">
+                    <h4 className="text-[11px] font-semibold text-gold-400">קובץ סופי</h4>
+                    {job?.output_url ? (
+                      <div className="space-y-1">
+                        <a
+                          href={job.output_url}
+                          className="text-gold-400 hover:underline break-all text-[11px] block"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {urlTailLabel(job.output_url) || 'הורד / צפה ב־MP4'}
+                        </a>
+                        <span className="text-[10px] text-midnight-500 font-mono break-all">{job.output_url}</span>
+                      </div>
+                    ) : job?.status === 'failed' ? (
+                      <p className="text-red-400 text-[11px]">ה-job נכשל — אין קובץ סופי.</p>
+                    ) : (
+                      <p className="text-midnight-500 text-[11px]">— (אחרי Shotstack)</p>
+                    )}
+                  </section>
+
+                  <div className="pt-2 border-t border-midnight-700/80 space-y-2">
+                    {activeLogJobId != null && (
+                      <p className="text-[10px] text-midnight-500 font-mono">
+                        job #{activeLogJobId}
+                        {job?.status ? ` · ${job.status}` : ''}
+                      </p>
+                    )}
+                    {job?.error_message && (
+                      <pre className="text-red-300 whitespace-pre-wrap text-[10px]">{job.error_message}</pre>
+                    )}
+                    {creativeJobs[0] && (
+                      <button
+                        type="button"
+                        className="text-[11px] text-gold-400 hover:underline"
+                        onClick={async () => {
+                          const id = creativeJobs[0].id;
+                          setActiveLogJobId(id);
+                          try {
+                            const d = await api.getCreativeVideoJob(id);
+                            setActiveLogJob(d.job || null);
+                          } catch (e) {
+                            setMessage({ type: 'error', text: e.message });
+                          }
+                        }}
+                      >
+                        הצג לוג של ה-job האחרון (#{creativeJobs[0].id})
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          <div className="glass rounded-xl p-6 space-y-4" dir="rtl">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Sparkles className="text-gold-400" size={22} />
+              יצירת סרטון קצר
+            </h2>
+            <p className="text-sm text-midnight-400" dir="rtl">
+              בריף ייצור (תסריט, חיפושי B-roll, כיתובים), וידאו אנכי מ־
+              <a href="https://www.pexels.com/" className="text-gold-400 underline mx-0.5" target="_blank" rel="noreferrer">
+                Pexels
+              </a>
+              , רינדור ב־
+              <a href="https://shotstack.io/docs/api/" className="text-gold-400 underline mx-0.5" target="_blank" rel="noreferrer">
+                Shotstack
+              </a>
+              .
+            </p>
+            <div className="flex flex-wrap gap-3 text-xs">
+              <span className={creativeCfg.pexels_configured ? 'text-emerald-400' : 'text-amber-400'}>
+                Pexels: {creativeCfg.pexels_configured ? 'מוגדר' : 'חסר מפתח'}
+              </span>
+              <span className={creativeCfg.shotstack_configured ? 'text-emerald-400' : 'text-amber-400'}>
+                Shotstack: {creativeCfg.shotstack_configured ? 'מוגדר' : 'חסר מפתח'}
+              </span>
+            </div>
+            <div>
+              <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                1. תיאור הסרטון
+              </label>
+              <textarea
+                className="input-dark w-full min-h-[100px]"
+                dir="rtl"
+                value={creativeDesc}
+                onChange={e => setCreativeDesc(e.target.value)}
+                placeholder="למשל: טיפים לקנייה חכמה באונליין…"
+              />
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  2. סגנון תסריט (קהל)
+                </label>
+                <select className="input-dark w-full" value={creativeTone} onChange={e => setCreativeTone(e.target.value)}>
+                  {(creativeOptions.tones || []).map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.label_he} ({t.id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  דמות / תמונת פינה (אופציונלי)
+                </label>
+                <select
+                  className="input-dark w-full"
+                  value={creativeCharacterId}
+                  onChange={e => setCreativeCharacterId(e.target.value)}
+                >
+                  <option value="">ברירת מחדל</option>
+                  {(creativeOptions.characters || []).map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                3. הוראות לתסריט, הדגשים, מבנה
+              </label>
+              <textarea
+                className="input-dark w-full min-h-[80px]"
+                dir="rtl"
+                value={scriptInstructions}
+                onChange={e => setScriptInstructions(e.target.value)}
+                placeholder="איך לספר את הסיפור, סדר כרונולוגי, טון דיבור…"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                4. הדגשים / חובה לכלול
+              </label>
+              <textarea
+                className="input-dark w-full min-h-[64px]"
+                dir="rtl"
+                value={emphasis}
+                onChange={e => setEmphasis(e.target.value)}
+                placeholder="משפטים, מסרים או ויזואל שחייבים להופיע…"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                5. קישורים להשראה (שורה לכל קישור)
+              </label>
+              <textarea
+                className="input-dark w-full min-h-[56px] font-mono text-xs"
+                dir="ltr"
+                value={inspirationUrls}
+                onChange={e => setInspirationUrls(e.target.value)}
+                placeholder="https://…"
+              />
+            </div>
+
+            <div className="grid sm:grid-cols-1 gap-3">
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  6. קבצי השראה (טקסט / תמונה / וידאו קצר, עד ~400KB לקובץ)
+                </label>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*,video/*,.txt,.md,text/plain"
+                  className="text-xs text-midnight-300 w-full"
+                  onChange={e => setInspirationFiles(Array.from(e.target.files || []))}
+                />
+                {inspirationFiles.length > 0 && (
+                  <p className="text-[11px] text-midnight-500 mt-1">{inspirationFiles.length} קבצים נבחרו</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  7. תמונות להמחשה
+                </label>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  className="text-xs text-midnight-300 w-full"
+                  onChange={e => setIllustrationFiles(Array.from(e.target.files || []))}
+                />
+                {illustrationFiles.length > 0 && (
+                  <p className="text-[11px] text-midnight-500 mt-1">{illustrationFiles.length} תמונות</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  8. צילום מהמצלמה (מובייל / מצלמת רשת)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="text-xs text-midnight-300 w-full"
+                  onChange={e => setCameraFiles(Array.from(e.target.files || []))}
+                />
+                {cameraFiles.length > 0 && (
+                  <p className="text-[11px] text-midnight-500 mt-1">{cameraFiles.length} צילומים</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  9. קול רקע / מוזיקה (מידע לתכנית; שילוב ברינדור Shotstack — בשלבים הבאים)
+                </label>
+                <input
+                  type="file"
+                  accept="audio/*,.mp3,.wav,.m4a,.ogg"
+                  className="text-xs text-midnight-300 w-full"
+                  onChange={e => setBackgroundAudioFile(e.target.files?.[0] || null)}
+                />
+                {backgroundAudioFile && (
+                  <p className="text-[11px] text-midnight-500 mt-1">{backgroundAudioFile.name}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  שפת תוכן
+                </label>
+                <select className="input-dark w-full" value={prodLanguage} onChange={e => setProdLanguage(e.target.value)}>
+                  <option value="he">עברית</option>
+                  <option value="en">אנגלית</option>
+                  <option value="mixed">מעורב</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  דיבור / דמות (מגדר)
+                </label>
+                <select className="input-dark w-full" value={prodGender} onChange={e => setProdGender(e.target.value)}>
+                  <option value="neutral">ניטרלי</option>
+                  <option value="male">זכר</option>
+                  <option value="female">נקבה</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  ייצוג (מראה)
+                </label>
+                <select className="input-dark w-full" value={prodEthnicity} onChange={e => setProdEthnicity(e.target.value)}>
+                  <option value="any">כללי / לא רלוונטי</option>
+                  <option value="black">שחור</option>
+                  <option value="white">לבן</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  קבוצת גיל
+                </label>
+                <select className="input-dark w-full" value={prodAge} onChange={e => setProdAge(e.target.value)}>
+                  <option value="child">ילד</option>
+                  <option value="young">צעיר</option>
+                  <option value="adult">בוגר</option>
+                  <option value="senior">מבוגר / זקן</option>
+                </select>
+              </div>
+              <div className="sm:col-span-2 lg:col-span-2">
+                <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                  סגנון וידאו
+                </label>
+                <select className="input-dark w-full" value={videoStyle} onChange={e => setVideoStyle(e.target.value)}>
+                  <option value="young">צעיר</option>
+                  <option value="nature">טבע</option>
+                  <option value="kids">לילדים</option>
+                  <option value="clubs">מועדונים</option>
+                  <option value="professional">מקצועי</option>
+                  <option value="spiritual">רוחני</option>
+                  <option value="polished">מכופתר</option>
+                  <option value="hippie">היפי</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                10. הערות נוספות (קצב, מותג…)
+              </label>
+              <textarea
+                className="input-dark w-full min-h-[72px]"
+                dir="rtl"
+                value={creativeNotes}
+                onChange={e => setCreativeNotes(e.target.value)}
+                placeholder="קצב, שפה, מותג…"
+              />
+            </div>
+
+            <button
+              type="button"
+              className="btn-gold flex items-center gap-2 disabled:opacity-50"
+              disabled={creativeBusy || planning}
+              onClick={handlePlanVideo}
+            >
+              <Sparkles size={18} />
+              {planning ? 'מתכנן…' : 'תכנן את הסרטון'}
+            </button>
+
+            {hasPlanned && (
+              <div className="rounded-xl border border-gold-500/35 bg-midnight-900/50 p-4 space-y-3 mt-2" dir="rtl">
+                <h3 className="text-sm font-semibold text-gold-400">תכנית — עריכה לפני יצירה</h3>
+                <p className="text-xs text-midnight-500">
+                  מתחת: מסמך תכנית בעברית ובריף טכני ב־JSON (כולל narration, scenes, שאילתות Pexels). ערכו בזהירות —
+                  JSON לא תקין ייעצר בשרת.
+                </p>
+                <div>
+                  <label className="block text-xs text-midnight-400 mb-1">מסמך תכנית (ניתן לערוך)</label>
+                  <textarea
+                    className="input-dark w-full min-h-[180px] text-xs leading-relaxed"
+                    value={planDocument}
+                    onChange={e => setPlanDocument(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-midnight-400 mb-1">בריף JSON (ניתן לערוך)</label>
+                  <textarea
+                    dir="ltr"
+                    className="input-dark w-full min-h-[240px] font-mono text-[11px] text-left"
+                    spellCheck={false}
+                    value={editableBriefJson}
+                    onChange={e => setEditableBriefJson(e.target.value)}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50"
+                  disabled={creativeBusy || creatingVideo}
+                  onClick={handleCreateVideoJob}
+                >
+                  <Sparkles size={18} />
+                  {creatingVideo ? 'שולח…' : 'צור סרטון (שליחה לענן)'}
+                </button>
+              </div>
+            )}
+
+            <p className="text-xs text-midnight-500" dir="rtl">
+              מקור תסריט LLM: טאב <strong>הגדרות סטודיו</strong>. מנגנון קול ברינדור נקבע שם תחת &quot;מנגנון יצירת קול&quot;.
+            </p>
+          </div>
         </div>
       )}
 
@@ -387,6 +1016,7 @@ export default function CreativeStudio() {
                           try {
                             const d = await api.getCreativeVideoJob(j.id);
                             setCreativeDetail(d.job);
+                            setActiveLogJobId(j.id);
                           } catch (e) {
                             setMessage({ type: 'error', text: e.message });
                           }
@@ -511,6 +1141,22 @@ export default function CreativeStudio() {
                 </div>
               </>
             )}
+            <div className="pt-3 border-t border-midnight-700/60">
+              <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
+                מנגנון יצירת קול (ברינדור)
+              </label>
+              <select
+                className="input-dark w-full max-w-lg"
+                value={settings.creative_voice_mechanism || 'shotstack_tts'}
+                onChange={e => setSettings({ ...settings, creative_voice_mechanism: e.target.value })}
+              >
+                <option value="shotstack_tts">Shotstack — דיבור (TTS) מובנה</option>
+                <option value="captions_only">ללא דיבור — כיתובים בלבד</option>
+              </select>
+              <p className="text-[11px] text-midnight-500 mt-1" dir="rtl">
+                ב&quot;ללא דיבור&quot; לא נשלח מסלול text-to-speech ל־Shotstack (רק וידאו Pexels + כיתובים).
+              </p>
+            </div>
           </div>
 
           <div className="border border-midnight-600 rounded-lg p-4 space-y-4 bg-midnight-900/20">

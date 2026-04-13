@@ -12,6 +12,7 @@ import {
   getCreativeStudioSettings,
   CREATIVE_STUDIO_SETTING_KEYS
 } from '../services/creative/creativeStudioSettings.js';
+import { planCreativeVideo } from '../services/creative/creativeScriptService.js';
 import scheduler from '../services/scheduler.js';
 
 const router = express.Router();
@@ -154,15 +155,55 @@ router.get('/jobs/:id', (req, res) => {
   }
 });
 
+router.post('/plan', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const videoDescription = String(body.videoDescription || '').trim();
+    if (videoDescription.length < 8) {
+      return res.status(400).json({ error: 'תיאור הסרטון קצר מדי (לפחות 8 תווים)' });
+    }
+    const scriptTone = String(body.scriptTone || 'adults').trim().toLowerCase();
+    const userNotes = String(body.userNotes || '').trim().slice(0, 8000);
+    const production = body.production && typeof body.production === 'object' ? body.production : null;
+
+    const settings = getCreativeStudioSettings();
+    const { brief, planDocument } = await planCreativeVideo(settings, {
+      videoDescription,
+      toneId: scriptTone,
+      userNotes,
+      production
+    });
+    res.json({
+      planDocument,
+      brief,
+      briefJson: JSON.stringify(brief, null, 2)
+    });
+  } catch (e) {
+    console.error('creative /plan:', e);
+    res.status(400).json({ error: e.message || String(e) });
+  }
+});
+
 router.post('/jobs', async (req, res) => {
   try {
-    const { videoDescription, scriptTone, userNotes, characterId } = req.body || {};
+    const {
+      videoDescription,
+      scriptTone,
+      userNotes,
+      characterId,
+      production,
+      planDocument,
+      approvedBriefJson
+    } = req.body || {};
     const { jobId } = await startNewCreativeVideoJob({
       videoDescription,
       scriptTone,
       userNotes,
       characterId,
-      triggerSource: 'manual'
+      triggerSource: 'manual',
+      productionInput: production && typeof production === 'object' ? production : undefined,
+      planDocument,
+      approvedBriefJson
     });
     res.json({ jobId, status: 'started' });
   } catch (e) {

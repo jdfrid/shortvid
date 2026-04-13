@@ -71,6 +71,22 @@ export async function initDatabase() {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_creative_jobs_status ON creative_video_jobs(status, created_at)`);
 
+  try {
+    db.run('ALTER TABLE creative_video_jobs ADD COLUMN production_input_json TEXT');
+  } catch {
+    /* exists */
+  }
+  try {
+    db.run('ALTER TABLE creative_video_jobs ADD COLUMN plan_document TEXT');
+  } catch {
+    /* exists */
+  }
+  try {
+    db.run('ALTER TABLE creative_video_jobs ADD COLUMN approved_brief_json TEXT');
+  } catch {
+    /* exists */
+  }
+
   const defaults = [
     ['creative_llm_provider', 'template'],
     ['creative_gemini_api_key', ''],
@@ -90,7 +106,8 @@ export async function initDatabase() {
     ['creative_pexels_per_page', '6'],
     ['creative_pexels_orientation', 'portrait'],
     ['creative_pexels_timeout_sec', '45'],
-    ['creative_pexels_prefer_quality', 'hd']
+    ['creative_pexels_prefer_quality', 'hd'],
+    ['creative_voice_mechanism', 'shotstack_tts']
   ];
   for (const [key, value] of defaults) {
     db.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [key, value]);

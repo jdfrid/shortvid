@@ -63,7 +63,8 @@ function pickVideoLink(files, preferQuality) {
  *   perPage?: number,
  *   orientation?: 'landscape'|'portrait'|'square',
  *   timeoutMs?: number,
- *   preferQuality?: 'hd'|'sd'|'any'
+ *   preferQuality?: 'hd'|'sd'|'any',
+ *   page?: number
  * }} [opts]
  * @returns {Promise<string[]>} Direct HTTPS links to video files
  */
@@ -79,9 +80,11 @@ export async function searchVideoUrls(query, opts = {}) {
   const orientation = opts.orientation || 'portrait';
   const timeoutMs = Math.min(120000, Math.max(5000, opts.timeoutMs ?? 45000));
   const preferQuality = opts.preferQuality || 'hd';
+  const pageRaw = parseInt(String(opts.page ?? 1), 10);
+  const page = Math.min(1000, Math.max(1, Number.isFinite(pageRaw) ? pageRaw : 1));
 
   const q = encodeURIComponent(query.trim().slice(0, 200));
-  const url = `${PEXELS_ROOT}/search?query=${q}&per_page=${perPage}&orientation=${orientation}`;
+  const url = `${PEXELS_ROOT}/search?query=${q}&per_page=${perPage}&orientation=${orientation}&page=${page}`;
 
   const res = await fetch(url, {
     headers: { Authorization: key },

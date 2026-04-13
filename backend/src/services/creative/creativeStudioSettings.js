@@ -17,7 +17,8 @@ export const CREATIVE_STUDIO_SETTING_KEYS = [
   'creative_pexels_per_page',
   'creative_pexels_orientation',
   'creative_pexels_timeout_sec',
-  'creative_pexels_prefer_quality'
+  'creative_pexels_prefer_quality',
+  'creative_voice_mechanism'
 ];
 
 export function getCreativeStudioSettings() {
