@@ -76,6 +76,7 @@ export default function CreativeStudio() {
   const [pexelsTesting, setPexelsTesting] = useState(false);
   const [shotstackKeyInput, setShotstackKeyInput] = useState('');
   const [shotstackTesting, setShotstackTesting] = useState(false);
+  const [loadedSettings, setLoadedSettings] = useState(null);
 
   const loadCreative = useCallback(async () => {
     const [st, jobs, opt] = await Promise.all([
@@ -94,7 +95,11 @@ export default function CreativeStudio() {
 
   const loadSettings = useCallback(async () => {
     const data = await api.getCreativeStudioSettings();
-    setSettings(prev => ({ ...prev, ...data }));
+    setSettings(prev => {
+      const merged = { ...prev, ...data };
+      setLoadedSettings(merged);
+      return merged;
+    });
   }, []);
 
   useEffect(() => {
@@ -126,10 +131,14 @@ export default function CreativeStudio() {
     setMessage(null);
     try {
       const payload = {};
+      const baseline = loadedSettings || {};
       for (const k of SETTINGS_PAYLOAD_KEYS) {
         const v = settings[k];
         if (v === undefined || v === null) continue;
-        payload[k] = typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v);
+        const normalized = typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v);
+        if (String(baseline[k] ?? '') !== normalized) {
+          payload[k] = normalized;
+        }
       }
       if (openaiKeyInput.trim()) payload.creative_openai_api_key = openaiKeyInput.trim();
       if (geminiKeyInput.trim()) payload.creative_gemini_api_key = geminiKeyInput.trim();
@@ -150,6 +159,11 @@ export default function CreativeStudio() {
         !settings.creative_openai_key_configured
       ) {
         setMessage({ type: 'error', text: 'נא להדביק מפתח OpenAI או לעבור ל-Template.' });
+        setSaving(false);
+        return;
+      }
+      if (Object.keys(payload).length === 0) {
+        setMessage({ type: 'ok', text: 'לא זוהו שינויים לשמירה.' });
         setSaving(false);
         return;
       }
