@@ -30,17 +30,25 @@ if (fs.existsSync(distPath)) {
 async function seedAdmin() {
   const email = process.env.ADMIN_EMAIL || 'admin@shortvid.local';
   const password = process.env.ADMIN_PASSWORD || 'changeme123';
+  const hash = await bcrypt.hash(password, 10);
   const existing = prepare('SELECT id FROM users WHERE email = ?').get(email);
-  if (!existing) {
-    const hash = await bcrypt.hash(password, 10);
-    prepare('INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)').run(
-      email,
+  if (existing) {
+    prepare('UPDATE users SET password = ?, name = ?, role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(
       hash,
       'Admin',
-      'admin'
+      'admin',
+      existing.id
     );
-    console.log(`✅ shortvid admin created: ${email} (change ADMIN_PASSWORD in production)`);
+    console.log(`✅ shortvid admin reset on boot: ${email}`);
+    return;
   }
+  prepare('INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)').run(
+    email,
+    hash,
+    'Admin',
+    'admin'
+  );
+  console.log(`✅ shortvid admin created: ${email}`);
 }
 
 async function start() {
