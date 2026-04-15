@@ -68,7 +68,8 @@ export async function testShotstackApiKey(optionalOverride) {
  *   scenes: { text: string, start_sec: number, duration_sec: number }[],
  *   characterImageUrl?: string | null,
  *   totalDurationSec: number,
- *   includeVoiceover?: boolean
+ *   includeVoiceover?: boolean,
+ *   voiceoverAudioUrl?: string | null
  * }} params
  */
 export function buildVerticalEdit(params) {
@@ -80,7 +81,8 @@ export function buildVerticalEdit(params) {
     scenes,
     characterImageUrl,
     totalDurationSec,
-    includeVoiceover = true
+    includeVoiceover = true,
+    voiceoverAudioUrl
   } = params;
 
   const total = Math.min(60, Math.max(12, totalDurationSec));
@@ -155,22 +157,39 @@ export function buildVerticalEdit(params) {
   }
 
   if (includeVoiceover !== false) {
-    tracks.push({
-      clips: [
-        {
-          asset: {
-            type: 'text-to-speech',
-            text: narration.slice(0, 4500),
-            voice: voice || 'Matthew',
-            language: 'en-US',
-            volume: 1,
-            effect: 'fadeIn'
-          },
-          start: 0,
-          length: total
-        }
-      ]
-    });
+    const audioSrc = String(voiceoverAudioUrl || '').trim();
+    if (audioSrc) {
+      tracks.push({
+        clips: [
+          {
+            asset: {
+              type: 'audio',
+              src: audioSrc,
+              volume: 1
+            },
+            start: 0,
+            length: total
+          }
+        ]
+      });
+    } else {
+      tracks.push({
+        clips: [
+          {
+            asset: {
+              type: 'text-to-speech',
+              text: narration.slice(0, 4500),
+              voice: voice || 'Matthew',
+              language: 'en-US',
+              volume: 1,
+              effect: 'fadeIn'
+            },
+            start: 0,
+            length: total
+          }
+        ]
+      });
+    }
   }
 
   return {

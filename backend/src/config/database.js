@@ -95,6 +95,7 @@ export async function initDatabase() {
     ['creative_gemini_model', 'gemini-2.0-flash'],
     ['creative_openai_api_key', ''],
     ['creative_openai_model', 'gpt-4o-mini'],
+    ['creative_gemini_video_model', 'veo-2.0-generate-001'],
     ['creative_video_provider', 'shotstack'],
     ['creative_video_auto_enabled', 'false'],
     ['creative_video_cron', '0 14 * * *'],
@@ -107,7 +108,9 @@ export async function initDatabase() {
     ['creative_pexels_orientation', 'portrait'],
     ['creative_pexels_timeout_sec', '45'],
     ['creative_pexels_prefer_quality', 'hd'],
-    ['creative_voice_mechanism', 'shotstack_tts']
+    ['creative_voice_mechanism', 'shotstack_tts'],
+    ['creative_google_tts_api_key', ''],
+    ['creative_google_tts_voice', 'en-US-Neural2-A']
   ];
   for (const [key, value] of defaults) {
     db.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [key, value]);

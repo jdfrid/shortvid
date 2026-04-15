@@ -1,7 +1,8 @@
-import { prepare } from '../../config/database.js';
+import path from 'path';
+import { prepare, getDataRoot } from '../../config/database.js';
 import { getCreativeStudioSettings } from './creativeStudioSettings.js';
 import { generateCreativeBrief } from './creativeScriptService.js';
-import { sanitizeApprovedBriefJson } from './productionPack.js';
+import { sanitizeApprovedBriefJson, formatProductionForPrompt } from './productionPack.js';
 import { searchVideoUrls, isPexelsConfigured } from './pexelsService.js';
 import { getCharacterById, getCharacters } from './creativeAssets.js';
 import {
@@ -10,6 +11,19 @@ import {
   waitForRender,
   isShotstackConfigured
 } from './shotstackRenderService.js';
+import {
+  resolveGoogleTtsApiKey,
+  publicAppBaseUrl,
+  synthesizeToMp3File
+} from './googleTtsService.js';
+import {
+  buildGeminiVideoPrompt,
+  isGeminiVideoConfigured,
+  resolveGeminiApiKey,
+  resolveGeminiVideoModel,
+  submitGeminiVideoGeneration,
+  waitForGeminiVideo
+} from './geminiVideoService.js';
 
 let creativeBusy = false;
 
@@ -46,19 +60,31 @@ function pickTimelineUrls(videoUrls, clipsCount, jobId) {
 }
 
 export function assertCreativePipelineReady() {
-  if (!isPexelsConfigured()) {
-    throw new Error(
-      'Pexels is not configured — set PEXELS_API_KEY on the server or save a key in Studio settings'
-    );
-  }
   const provider = (setting('creative_video_provider', 'shotstack') || 'shotstack').toLowerCase();
-  if (provider === 'shotstack' && !isShotstackConfigured()) {
-    throw new Error(
-      'Shotstack is not configured — set SHOTSTACK_API_KEY on the server or save a key in Studio settings'
-    );
+  if (provider === 'shotstack') {
+    if (!isPexelsConfigured()) {
+      throw new Error(
+        'Pexels is not configured — set PEXELS_API_KEY on the server or save a key in Studio settings'
+      );
+    }
+    if (!isShotstackConfigured()) {
+      throw new Error(
+        'Shotstack is not configured — set SHOTSTACK_API_KEY on the server or save a key in Studio settings'
+      );
+    }
+    return;
   }
-  if (provider !== 'shotstack') {
-    throw new Error(`Render provider "${provider}" is not implemented yet — use shotstack in Settings`);
+  if (provider === 'gemini_video') {
+    const settings = getCreativeStudioSettings();
+    if (!isGeminiVideoConfigured(settings)) {
+      throw new Error(
+        'Gemini video is not configured — set CREATIVE_GEMINI_API_KEY in env or save a Gemini key in Studio settings'
+      );
+    }
+    return;
+  }
+  if (!['shotstack', 'gemini_video'].includes(provider)) {
+    throw new Error(`Render provider "${provider}" is not implemented yet — use shotstack or gemini_video in Settings`);
   }
 }
 
@@ -145,6 +171,9 @@ export async function processCreativeVideoJob(jobId) {
     assertCreativePipelineReady();
 
     const settings = getCreativeStudioSettings();
+    const provider = String(row.render_provider || setting('creative_video_provider', 'shotstack') || 'shotstack')
+      .trim()
+      .toLowerCase();
 
     let brief;
     const preApproved = (row.approved_brief_json || '').trim();
@@ -167,6 +196,109 @@ export async function processCreativeVideoJob(jobId) {
 
     const voiceMech = String(settings.creative_voice_mechanism || 'shotstack_tts').trim().toLowerCase();
     const includeVoiceover = voiceMech !== 'captions_only';
+
+    if (provider === 'gemini_video') {
+      let production = null;
+      try {
+        if (row.production_input_json) production = JSON.parse(row.production_input_json);
+      } catch {
+        production = null;
+      }
+      const productionText = formatProductionForPrompt(production);
+      const prompt = buildGeminiVideoPrompt({
+        videoDescription: row.video_description,
+        userNotes: row.user_notes || '',
+        brief,
+        productionText,
+        planDocument: row.plan_document || ''
+      });
+      const geminiApiKey = resolveGeminiApiKey(settings);
+      const geminiVideoModel = resolveGeminiVideoModel(settings);
+      const submit = await submitGeminiVideoGeneration({
+        apiKey: geminiApiKey,
+        model: geminiVideoModel,
+        prompt,
+        aspectRatio: '9:16'
+      });
+
+      prepare(
+        `
+      UPDATE creative_video_jobs SET
+        external_render_id = ?,
+        brief_json = ?,
+        pexels_urls_json = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+      ).run(
+        submit.operationName || null,
+        JSON.stringify({
+          ...brief,
+          debug: {
+            ...(brief.debug || {}),
+            render_provider: 'gemini_video',
+            gemini_video_model: geminiVideoModel,
+            gemini_video_operation: submit.operationName || null,
+            gemini_video_prompt: prompt,
+            gemini_video_submit_response: submit.submitPayload
+              ? JSON.stringify(submit.submitPayload).slice(0, 6000)
+              : null
+          }
+        }),
+        null,
+        id
+      );
+
+      const resolved =
+        submit.url != null
+          ? { url: submit.url, operationPayload: submit.submitPayload }
+          : await waitForGeminiVideo({
+              apiKey: geminiApiKey,
+              operationName: submit.operationName
+            });
+
+      prepare(
+        `
+      UPDATE creative_video_jobs SET
+        status = 'completed',
+        output_url = ?,
+        error_message = NULL,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+      ).run(resolved.url, id);
+      return;
+    }
+
+    let voiceoverAudioUrl = null;
+    if (voiceMech === 'google_cloud_tts') {
+      const gKey = resolveGoogleTtsApiKey(settings);
+      if (!gKey) {
+        throw new Error(
+          'נבחר Google Cloud TTS — הגדר מפתח API בהגדרות הסטודיו או משתנה סביבה GOOGLE_CLOUD_TTS_API_KEY'
+        );
+      }
+      const base = publicAppBaseUrl();
+      if (!base) {
+        throw new Error(
+          'נבחר Google Cloud TTS — חובה כתובת האפליקציה בפומבי: PUBLIC_BASE_URL או RENDER_EXTERNAL_URL (כדי ש־Shotstack יוריד את קובץ הדיבור)'
+        );
+      }
+      const ttsDir = path.join(getDataRoot(), 'creative_tts');
+      const outFile = path.join(ttsDir, `${id}.mp3`);
+      const lang =
+        String(brief.tts_language || 'en-US')
+          .trim()
+          .replace('_', '-')
+          .slice(0, 16) || 'en-US';
+      const voiceName =
+        String(settings.creative_google_tts_voice || 'en-US-Neural2-A').trim() || 'en-US-Neural2-A';
+      await synthesizeToMp3File(
+        { text: brief.narration, voiceName, languageCode: lang, apiKey: gKey },
+        outFile
+      );
+      voiceoverAudioUrl = `${base}/api/creative/public-tts/${id}`;
+    }
 
     const pexelsOpts = pexelsSearchOptsFromSettings(settings);
     const queries = brief.pexels_search_queries.map(q => String(q).trim()).filter(Boolean);
@@ -219,7 +351,8 @@ export async function processCreativeVideoJob(jobId) {
       })),
       characterImageUrl,
       totalDurationSec,
-      includeVoiceover
+      includeVoiceover,
+      voiceoverAudioUrl
     });
 
     const enrichedBrief = {
@@ -234,9 +367,11 @@ export async function processCreativeVideoJob(jobId) {
         character_image_url: characterImageUrl,
         segment_length_sec: Number(segmentLengthSec.toFixed(2)),
         total_duration_sec: totalDurationSec,
-        render_provider: row.render_provider || 'shotstack',
+        render_provider: provider || 'shotstack',
         voice_mechanism: voiceMech,
-        include_voiceover: includeVoiceover
+        include_voiceover: includeVoiceover,
+        google_tts_voice: voiceMech === 'google_cloud_tts' ? settings.creative_google_tts_voice : null,
+        voiceover_audio_public_url: voiceoverAudioUrl
       }
     };
 

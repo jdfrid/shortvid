@@ -31,7 +31,9 @@ const SETTINGS_PAYLOAD_KEYS = [
   'creative_pexels_orientation',
   'creative_pexels_timeout_sec',
   'creative_pexels_prefer_quality',
-  'creative_voice_mechanism'
+  'creative_voice_mechanism',
+  'creative_google_tts_voice',
+  'creative_gemini_video_model'
 ];
 
 const MAX_ASSET_BYTES = 400 * 1024;
@@ -87,7 +89,11 @@ export default function CreativeStudio() {
 
   const [creativeBusy, setCreativeBusy] = useState(false);
   const [creativeJobs, setCreativeJobs] = useState([]);
-  const [creativeCfg, setCreativeCfg] = useState({ pexels_configured: false, shotstack_configured: false });
+  const [creativeCfg, setCreativeCfg] = useState({
+    pexels_configured: false,
+    shotstack_configured: false,
+    gemini_video_configured: false
+  });
   const [creativeOptions, setCreativeOptions] = useState({ characters: [], tones: [] });
   const [creativeDesc, setCreativeDesc] = useState('');
   const [creativeTone, setCreativeTone] = useState('adults');
@@ -111,6 +117,9 @@ export default function CreativeStudio() {
 
   const [planDocument, setPlanDocument] = useState('');
   const [editableBriefJson, setEditableBriefJson] = useState('');
+  const [planPromptFull, setPlanPromptFull] = useState('');
+  const [planLlmRaw, setPlanLlmRaw] = useState('');
+  const [planLlmProvider, setPlanLlmProvider] = useState('');
   const [hasPlanned, setHasPlanned] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [creatingVideo, setCreatingVideo] = useState(false);
@@ -119,6 +128,7 @@ export default function CreativeStudio() {
     creative_llm_provider: 'template',
     creative_gemini_model: 'gemini-2.0-flash',
     creative_openai_model: 'gpt-4o-mini',
+    creative_gemini_video_model: 'veo-2.0-generate-001',
     creative_video_provider: 'shotstack',
     creative_video_auto_enabled: 'false',
     creative_video_cron: '0 14 * * *',
@@ -130,10 +140,16 @@ export default function CreativeStudio() {
     creative_pexels_timeout_sec: '45',
     creative_pexels_prefer_quality: 'hd',
     creative_voice_mechanism: 'shotstack_tts',
+    creative_google_tts_voice: 'en-US-Neural2-A',
     creative_openai_key_configured: false,
     creative_gemini_key_configured: false,
     creative_pexels_key_configured: false,
-    creative_shotstack_key_configured: false
+    creative_shotstack_key_configured: false,
+    creative_google_tts_key_configured: false,
+    creative_google_tts_from_env: false,
+    creative_gemini_from_env: false,
+    creative_openai_from_env: false,
+    creative_llm_provider_from_env: false
   });
   const [openaiKeyInput, setOpenaiKeyInput] = useState('');
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
@@ -141,6 +157,7 @@ export default function CreativeStudio() {
   const [pexelsTesting, setPexelsTesting] = useState(false);
   const [shotstackKeyInput, setShotstackKeyInput] = useState('');
   const [shotstackTesting, setShotstackTesting] = useState(false);
+  const [googleTtsKeyInput, setGoogleTtsKeyInput] = useState('');
   const [loadedSettings, setLoadedSettings] = useState(null);
   const [activeLogJobId, setActiveLogJobId] = useState(null);
   const [activeLogJob, setActiveLogJob] = useState(null);
@@ -155,7 +172,8 @@ export default function CreativeStudio() {
     setCreativeBusy(!!st.busy);
     setCreativeCfg({
       pexels_configured: !!st.pexels_configured,
-      shotstack_configured: !!st.shotstack_configured
+      shotstack_configured: !!st.shotstack_configured,
+      gemini_video_configured: !!st.gemini_video_configured
     });
     setCreativeJobs(jobs.jobs || []);
     setCreativeOptions({ characters: opt.characters || [], tones: opt.tones || [] });
@@ -239,21 +257,43 @@ export default function CreativeStudio() {
       if (geminiKeyInput.trim()) payload.creative_gemini_api_key = geminiKeyInput.trim();
       if (pexelsKeyInput.trim()) payload.creative_pexels_api_key = pexelsKeyInput.trim();
       if (shotstackKeyInput.trim()) payload.creative_shotstack_api_key = shotstackKeyInput.trim();
+      if (googleTtsKeyInput.trim()) payload.creative_google_tts_api_key = googleTtsKeyInput.trim();
+      if (
+        (settings.creative_voice_mechanism || '') === 'google_cloud_tts' &&
+        !googleTtsKeyInput.trim() &&
+        !settings.creative_google_tts_key_configured &&
+        !settings.creative_google_tts_from_env
+      ) {
+        setMessage({
+          type: 'error',
+          text: 'נבחר Google Cloud TTS — נא להדביק מפתח API או להגדיר GOOGLE_CLOUD_TTS_API_KEY בסביבת השרת.'
+        });
+        setSaving(false);
+        return;
+      }
       if (
         (settings.creative_llm_provider || 'template') === 'gemini' &&
         !geminiKeyInput.trim() &&
-        !settings.creative_gemini_key_configured
+        !settings.creative_gemini_key_configured &&
+        !settings.creative_gemini_from_env
       ) {
-        setMessage({ type: 'error', text: 'נא להדביק מפתח Gemini או לעבור ל-Template.' });
+        setMessage({
+          type: 'error',
+          text: 'נא להדביק מפתח Gemini, או להגדיר CREATIVE_GEMINI_API_KEY בסביבה, או לעבור ל-Template.'
+        });
         setSaving(false);
         return;
       }
       if (
         (settings.creative_llm_provider || 'template') === 'openai' &&
         !openaiKeyInput.trim() &&
-        !settings.creative_openai_key_configured
+        !settings.creative_openai_key_configured &&
+        !settings.creative_openai_from_env
       ) {
-        setMessage({ type: 'error', text: 'נא להדביק מפתח OpenAI או לעבור ל-Template.' });
+        setMessage({
+          type: 'error',
+          text: 'נא להדביק מפתח OpenAI, או להגדיר CREATIVE_OPENAI_API_KEY בסביבה, או לעבור ל-Template.'
+        });
         setSaving(false);
         return;
       }
@@ -267,6 +307,7 @@ export default function CreativeStudio() {
       setGeminiKeyInput('');
       setPexelsKeyInput('');
       setShotstackKeyInput('');
+      setGoogleTtsKeyInput('');
       await loadSettings();
       setMessage({ type: 'ok', text: 'הגדרות הסטודיו נשמרו.' });
     } catch (e) {
@@ -327,6 +368,9 @@ export default function CreativeStudio() {
       });
       setPlanDocument(res.planDocument || '');
       setEditableBriefJson(res.briefJson || JSON.stringify(res.brief, null, 2));
+      setPlanPromptFull(res.llmPromptFullText || res.brief?.debug?.llm_prompt_full_text || '');
+      setPlanLlmRaw(res.llmRawText || res.brief?.debug?.llm_raw_text || '');
+      setPlanLlmProvider(res.llmProvider || res.brief?.debug?.llm_provider || '');
       setHasPlanned(true);
       setMessage({
         type: 'ok',
@@ -713,6 +757,9 @@ export default function CreativeStudio() {
               <span className={creativeCfg.shotstack_configured ? 'text-emerald-400' : 'text-amber-400'}>
                 Shotstack: {creativeCfg.shotstack_configured ? 'מוגדר' : 'חסר מפתח'}
               </span>
+              <span className={creativeCfg.gemini_video_configured ? 'text-emerald-400' : 'text-amber-400'}>
+                Gemini Video: {creativeCfg.gemini_video_configured ? 'מוגדר' : 'חסר מפתח Gemini'}
+              </span>
             </div>
             <div>
               <label className="block text-sm text-midnight-300 mb-1" dir="rtl">
@@ -941,8 +988,71 @@ export default function CreativeStudio() {
               {planning ? 'מתכנן…' : 'תכנן את הסרטון'}
             </button>
 
+            <div
+              className="mt-4 rounded-xl border-2 border-gold-500/50 bg-midnight-950/70 p-4 ring-1 ring-gold-400/20 scroll-mt-4"
+              dir="rtl"
+              id="creative-plan-llm-raw"
+            >
+              <h3 className="text-sm font-semibold text-gold-400 mb-1 flex items-center gap-2">
+                <Sparkles className="shrink-0 text-gold-300" size={16} />
+                תשובה גולמית מהמודל (Gemini / OpenAI)
+              </h3>
+              <p className="text-[11px] text-midnight-400 mb-2">
+                מופיע כאן הטקסט/JSON כפי שחזר מה-API (לפני המרה לבריף). אם בחרתם Template — לא תהיה כאן תשובת רשת.
+              </p>
+              <label className="sr-only" htmlFor="plan-llm-prompt-textarea">
+                פרומפט מלא שנשלח למנוע
+              </label>
+              <textarea
+                id="plan-llm-prompt-textarea"
+                dir="ltr"
+                readOnly
+                aria-readonly="true"
+                className="mb-3 w-full min-h-[170px] max-h-[420px] overflow-y-auto rounded-lg border border-gold-600/50 bg-midnight-950 px-3 py-2 font-mono text-[11px] leading-relaxed text-gold-100"
+                spellCheck={false}
+                value={
+                  planPromptFull ||
+                  (!hasPlanned
+                    ? '← כאן יוצג הפרומפט המלא שנשלח למנוע התסריט אחרי לחיצה על ״תכנן את הסרטון״.'
+                    : planLlmProvider === 'template'
+                      ? '(Template: אין בקשת API חיצונית ולכן אין פרומפט רשת מלא להצגה.)'
+                      : '(לא התקבל פרומפט מלא. בדקו לוג שרת ונסו תכנון מחדש.)')
+                }
+              />
+              <label className="sr-only" htmlFor="plan-llm-raw-textarea">
+                תשובה גולמית מהמודל
+              </label>
+              <textarea
+                id="plan-llm-raw-textarea"
+                dir="ltr"
+                readOnly
+                aria-readonly="true"
+                className="w-full min-h-[160px] max-h-[360px] overflow-y-auto rounded-lg border border-midnight-600 bg-midnight-900 px-3 py-2 font-mono text-[11px] leading-relaxed text-midnight-100"
+                spellCheck={false}
+                value={
+                  planLlmRaw ||
+                  (!hasPlanned
+                    ? '← לחצו למעלה על ״תכנן את הסרטון״ — התשובה הגולמית מ־Gemini (או OpenAI) תופיע כאן.'
+                    : planLlmProvider === 'template'
+                      ? '(מצב Template — אין קריאה ל-Gemini/OpenAI; התסריט נוצר מתבנית מקומית.)'
+                      : '(אין טקסט גולמי מהשרת — בדקו מפתח, הגדרות LLM, או לוג שגיאות ב-Render.)')
+                }
+              />
+              {planLlmProvider ? (
+                <p className="text-[10px] text-midnight-500 mt-2 font-mono" dir="ltr">
+                  מקור: {planLlmProvider}
+                  {settings.creative_gemini_model && planLlmProvider === 'gemini'
+                    ? ` · ${settings.creative_gemini_model}`
+                    : ''}
+                  {settings.creative_openai_model && planLlmProvider === 'openai'
+                    ? ` · ${settings.creative_openai_model}`
+                    : ''}
+                </p>
+              ) : null}
+            </div>
+
             {hasPlanned && (
-              <div className="rounded-xl border border-gold-500/35 bg-midnight-900/50 p-4 space-y-3 mt-2" dir="rtl">
+              <div className="rounded-xl border border-gold-500/35 bg-midnight-900/50 p-4 space-y-3 mt-4" dir="rtl">
                 <h3 className="text-sm font-semibold text-gold-400">תכנית — עריכה לפני יצירה</h3>
                 <p className="text-xs text-midnight-500">
                   מתחת: מסמך תכנית בעברית ובריף טכני ב־JSON (כולל narration, scenes, שאילתות Pexels). ערכו בזהירות —
@@ -1090,10 +1200,23 @@ export default function CreativeStudio() {
             </div>
             {(settings.creative_llm_provider || 'template') === 'gemini' && (
               <>
+                {settings.creative_gemini_from_env && (
+                  <p className="text-xs text-emerald-400 mb-2" dir="rtl">
+                    מפתח Gemini פעיל מ־<code className="text-midnight-200">CREATIVE_GEMINI_API_KEY</code> בסביבת השרת —
+                    נשלח ל-Gemini עם מלא תוכן הבריף מהטופס.
+                  </p>
+                )}
+                {settings.creative_llm_provider_from_env && (
+                  <p className="text-[11px] text-midnight-400 mb-2" dir="rtl">
+                    מקור התסריט נקבע מ־<code className="text-midnight-200">CREATIVE_LLM_PROVIDER</code> בסביבה.
+                  </p>
+                )}
                 <div>
                   <label className="block text-sm text-midnight-300 mb-1">Gemini API key</label>
                   <p className="text-xs text-midnight-500 mb-1">
-                    {settings.creative_gemini_key_configured ? 'מפתח שמור — הדבק רק להחלפה.' : 'לא הוגדר.'}
+                    {settings.creative_gemini_key_configured || settings.creative_gemini_from_env
+                      ? 'מפתח זמין (מסד ו/או סביבה) — הדבק רק להחלפה במסד.'
+                      : 'לא הוגדר במסד — אפשר להדביק כאן או להגדיר בסביבה.'}
                   </p>
                   <input
                     type="text"
@@ -1151,16 +1274,59 @@ export default function CreativeStudio() {
                 onChange={e => setSettings({ ...settings, creative_voice_mechanism: e.target.value })}
               >
                 <option value="shotstack_tts">Shotstack — דיבור (TTS) מובנה</option>
+                <option value="google_cloud_tts">Google Cloud — דיבור (TTS נוירלי / Visual)</option>
                 <option value="captions_only">ללא דיבור — כיתובים בלבד</option>
               </select>
               <p className="text-[11px] text-midnight-500 mt-1" dir="rtl">
-                ב&quot;ללא דיבור&quot; לא נשלח מסלול text-to-speech ל־Shotstack (רק וידאו Pexels + כיתובים).
+                ב&quot;ללא דיבור&quot; לא נשלח מסלול דיבור ל־Shotstack. ב־Google Cloud נוצר MP3 בשרת, ו־Shotstack מוריד אותו מכתובת
+                פומבית — חובה <code className="text-midnight-300">PUBLIC_BASE_URL</code> או{' '}
+                <code className="text-midnight-300">RENDER_EXTERNAL_URL</code> ב־Render.
               </p>
+              {(settings.creative_voice_mechanism || '') === 'google_cloud_tts' && (
+                <div className="mt-3 space-y-2 rounded-lg border border-midnight-600/80 bg-midnight-950/40 p-3">
+                  {settings.creative_google_tts_from_env && (
+                    <p className="text-[11px] text-emerald-400" dir="rtl">
+                      מפתח Google TTS פעיל מ־<code className="text-midnight-200">GOOGLE_CLOUD_TTS_API_KEY</code> בסביבה.
+                    </p>
+                  )}
+                  <div>
+                    <label className="block text-sm text-midnight-300 mb-1">מפתח Google Cloud Text-to-Speech API</label>
+                    <p className="text-[11px] text-midnight-500 mb-1">
+                      {settings.creative_google_tts_key_configured
+                        ? 'מפתח שמור — הדבק רק להחלפה.'
+                        : 'לא הוגדר במסד — אפשר להדביק כאן או להגדיר בסביבה.'}
+                    </p>
+                    <input
+                      type="password"
+                      className="input-dark w-full font-mono text-sm"
+                      value={googleTtsKeyInput}
+                      onChange={e => setGoogleTtsKeyInput(e.target.value)}
+                      placeholder="API key (Google Cloud Console → APIs → Text-to-Speech)"
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-midnight-300 mb-1">שם קול (Voice name)</label>
+                    <input
+                      className="input-dark w-full font-mono text-sm max-w-lg"
+                      value={settings.creative_google_tts_voice || 'en-US-Neural2-A'}
+                      onChange={e => setSettings({ ...settings, creative_google_tts_voice: e.target.value })}
+                      placeholder="en-US-Neural2-A"
+                      spellCheck={false}
+                    />
+                    <p className="text-[10px] text-midnight-500 mt-1" dir="rtl">
+                      חייב להתאים ל־<code className="text-midnight-300">tts_language</code> בבריף (ברירת מחדל en-US). רשימת קולות:
+                      תיעוד Google Cloud TTS.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
           <div className="border border-midnight-600 rounded-lg p-4 space-y-4 bg-midnight-900/20">
-            <h3 className="text-sm font-semibold text-gold-300">Pexels → Shotstack</h3>
+            <h3 className="text-sm font-semibold text-gold-300">ספק יצירת וידאו (Shotstack / Gemini Video)</h3>
             <p className="text-xs text-midnight-400" dir="rtl">
               מפתחות: עדיפות ל־משתני סביבה (<code className="text-midnight-300">PEXELS_API_KEY</code>,{' '}
               <code className="text-midnight-300">SHOTSTACK_API_KEY</code>), אחרת הערכים השמורים כאן במסד.
@@ -1303,8 +1469,24 @@ export default function CreativeStudio() {
                 onChange={e => setSettings({ ...settings, creative_video_provider: e.target.value })}
               >
                 <option value="shotstack">Shotstack</option>
+                <option value="gemini_video">Gemini Video (Veo)</option>
               </select>
             </div>
+            {(settings.creative_video_provider || 'shotstack') === 'gemini_video' && (
+              <div className="rounded-lg border border-midnight-700/80 bg-midnight-950/40 p-3">
+                <label className="block text-sm text-midnight-300 mb-1">Gemini video model</label>
+                <input
+                  className="input-dark w-full max-w-lg font-mono text-sm"
+                  value={settings.creative_gemini_video_model || 'veo-2.0-generate-001'}
+                  onChange={e => setSettings({ ...settings, creative_gemini_video_model: e.target.value })}
+                  placeholder="veo-2.0-generate-001"
+                  spellCheck={false}
+                />
+                <p className="text-[11px] text-midnight-500 mt-1" dir="rtl">
+                  דורש מפתח Gemini פעיל. במסלול זה אין שימוש ב-Pexels/Shotstack — נשלח פרומפט מלא ליצירת וידאו ישירות ב-Gemini.
+                </p>
+              </div>
+            )}
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"

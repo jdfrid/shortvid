@@ -132,7 +132,51 @@ function parseBrief(raw, label) {
   return p;
 }
 
+function unwrapJsonFence(raw) {
+  let s = String(raw).trim();
+  if (s.startsWith('```')) {
+    s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/u, '');
+  }
+  return s.trim();
+}
+
+/** Full text from Gemini candidates; throws with a clear reason if blocked or empty. */
+function extractGeminiResponseText(data) {
+  const err = data?.error;
+  if (err) {
+    throw new Error(`Gemini API: ${err.message || JSON.stringify(err).slice(0, 400)}`);
+  }
+  const feedback = data.promptFeedback;
+  if (feedback?.blockReason) {
+    throw new Error(`Gemini blocked the prompt (${feedback.blockReason}).`);
+  }
+  const candidates = data.candidates;
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    const msg = feedback ? JSON.stringify(feedback) : JSON.stringify(data).slice(0, 500);
+    throw new Error(`Gemini returned no candidates — ${msg}`);
+  }
+  const cand = candidates[0];
+  const reason = cand.finishReason;
+  if (reason === 'SAFETY' || reason === 'RECITATION') {
+    throw new Error(`Gemini refused output (finishReason=${reason}).`);
+  }
+  const parts = cand.content?.parts;
+  if (!Array.isArray(parts)) {
+    throw new Error('Gemini: missing content.parts in response');
+  }
+  const text = parts.map(p => (typeof p?.text === 'string' ? p.text : '')).join('');
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error(
+      `Gemini returned empty text (finishReason=${reason || 'unknown'}). Try another model or shorten input.`
+    );
+  }
+  return trimmed;
+}
+
 async function briefOpenAI({ apiKey, model, userBlock }) {
+  const systemText = `You are a senior short-form video producer. ${BRIEF_SCHEMA}`;
+  const userText = String(userBlock || '');
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -144,8 +188,8 @@ async function briefOpenAI({ apiKey, model, userBlock }) {
       response_format: { type: 'json_object' },
       temperature: 0.85,
       messages: [
-        { role: 'system', content: `You are a senior short-form video producer. ${BRIEF_SCHEMA}` },
-        { role: 'user', content: userBlock }
+        { role: 'system', content: systemText },
+        { role: 'user', content: userText }
       ]
     })
   });
@@ -156,31 +200,76 @@ async function briefOpenAI({ apiKey, model, userBlock }) {
   const data = await res.json();
   const raw = data.choices?.[0]?.message?.content;
   if (!raw) throw new Error('OpenAI returned empty content');
-  return parseBrief(raw, 'OpenAI');
+  const promptFullText = `OPENAI CHAT REQUEST\n--- SYSTEM ---\n${systemText}\n\n--- USER ---\n${userText}`;
+  return { brief: parseBrief(raw, 'OpenAI'), llmRawText: String(raw), promptFullText };
 }
 
 async function briefGemini({ apiKey, model, userBlock }) {
+  const userTrim = String(userBlock || '').trim();
+  if (!userTrim) {
+    throw new Error('Gemini: internal error — client brief (user block) is empty');
+  }
+
   const m = (model || 'gemini-2.0-flash').trim();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: `${BRIEF_SCHEMA}\n\n---\n${userBlock}` }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.85
+
+  const systemText = `You are a senior short-form video producer.
+
+You MUST read the entire user message below the line "CLIENT BRIEF". It contains the real video idea, audience tone, notes, and optional production instructions. Your JSON output must reflect that content (story, mood, visuals) — do not invent unrelated topics.
+
+Output ONLY one JSON object. No markdown fences. No text before or after the JSON.
+
+Schema and rules:
+${BRIEF_SCHEMA}`;
+
+  const userText = `=== CLIENT BRIEF (use all sections) ===\n\n${userTrim}`;
+
+  const generationConfig = {
+    temperature: 0.85,
+    responseMimeType: 'application/json'
+  };
+
+  const bodyWithSystem = {
+    systemInstruction: { parts: [{ text: systemText }] },
+    contents: [{ role: 'user', parts: [{ text: userText }] }],
+    generationConfig
+  };
+
+  const bodyFallback = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: `${systemText}\n\n---\n\n${userText}` }]
       }
-    })
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini error ${res.status}: ${err.slice(0, 400)}`);
+    ],
+    generationConfig
+  };
+
+  const post = async body =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120000)
+    });
+
+  let res = await post(bodyWithSystem);
+  let data = await res.json().catch(() => ({}));
+
+  if (!res.ok && res.status === 400) {
+    console.warn('[creative-video] Gemini request with systemInstruction failed; retrying combined user message:', JSON.stringify(data).slice(0, 280));
+    res = await post(bodyFallback);
+    data = await res.json().catch(() => ({}));
   }
-  const data = await res.json();
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!raw) throw new Error('Gemini returned empty content');
-  return parseBrief(raw, 'Gemini');
+
+  if (!res.ok) {
+    throw new Error(`Gemini error ${res.status}: ${JSON.stringify(data).slice(0, 450)}`);
+  }
+
+  const extracted = extractGeminiResponseText(data);
+  const rawForParse = unwrapJsonFence(extracted);
+  const promptFullText = `GEMINI REQUEST\n--- SYSTEM INSTRUCTION ---\n${systemText}\n\n--- USER CONTENT ---\n${userText}`;
+  return { brief: parseBrief(rawForParse, 'Gemini'), llmRawText: extracted, promptFullText };
 }
 
 function userBlock({ videoDescription, toneId, userNotes, toneHint, productionPackText }) {
@@ -189,14 +278,26 @@ function userBlock({ videoDescription, toneId, userNotes, toneHint, productionPa
   return `${base}\n\n---\nDetailed production pack (instructions, demographics, style, file references):\n${productionPackText}`;
 }
 
-function attachDebug(brief, { provider, model, userPrompt }) {
+const LLM_RAW_MAX = 240_000;
+
+function attachDebug(brief, { provider, model, userPrompt, llmRawText, promptFullText }) {
+  const raw =
+    llmRawText != null && String(llmRawText).trim()
+      ? String(llmRawText).slice(0, LLM_RAW_MAX)
+      : undefined;
+  const fullPrompt =
+    promptFullText != null && String(promptFullText).trim()
+      ? String(promptFullText).slice(0, LLM_RAW_MAX)
+      : undefined;
   return {
     ...brief,
     debug: {
       ...(brief.debug || {}),
       llm_provider: provider,
       llm_model: model || null,
-      prompt_user_block: userPrompt
+      prompt_user_block: userPrompt,
+      ...(raw != null ? { llm_raw_text: raw } : {}),
+      ...(fullPrompt != null ? { llm_prompt_full_text: fullPrompt } : {})
     }
   };
 }
@@ -251,9 +352,14 @@ export function generateBriefTemplate({ videoDescription, toneId, userNotes, pro
 /** @param {Record<string, string>} settings — Creative studio only (see creativeStudioSettings.js). */
 export async function generateCreativeBrief(settings, { videoDescription, toneId, userNotes, production }) {
   const tone = getToneById(toneId);
+  const vd = String(videoDescription ?? '').trim();
+  if (!vd) {
+    throw new Error('חסר תיאור סרטון — לא ניתן לבקש תסריט מהמודל');
+  }
+
   const pack = formatProductionForPrompt(production);
   const block = userBlock({
-    videoDescription,
+    videoDescription: vd,
     toneId: tone.id,
     userNotes,
     toneHint: tone.hint,
@@ -266,16 +372,22 @@ export async function generateCreativeBrief(settings, { videoDescription, toneId
     const key = (settings.creative_openai_api_key || '').trim();
     if (!key) throw new Error('Creative studio: OpenAI selected but no API key configured');
     try {
-      const brief = await briefOpenAI({ apiKey: key, model: settings.creative_openai_model, userBlock: block });
+      const { brief, llmRawText, promptFullText } = await briefOpenAI({
+        apiKey: key,
+        model: settings.creative_openai_model,
+        userBlock: block
+      });
       return attachDebug(brief, {
         provider: 'openai',
         model: settings.creative_openai_model || 'gpt-4o-mini',
-        userPrompt: block
+        userPrompt: block,
+        llmRawText,
+        promptFullText
       });
     } catch (e) {
       if (isLlmQuotaOrRateLimitError(e)) {
         console.warn('[creative-video] OpenAI quota/rate limit; using template brief.');
-        return generateBriefTemplate({ videoDescription, toneId: tone.id, userNotes, production });
+        return generateBriefTemplate({ videoDescription: vd, toneId: tone.id, userNotes, production });
       }
       throw e;
     }
@@ -283,24 +395,48 @@ export async function generateCreativeBrief(settings, { videoDescription, toneId
 
   if (p === 'gemini') {
     const key = (settings.creative_gemini_api_key || '').trim();
-    if (!key) throw new Error('Creative studio: Gemini selected but no API key configured');
+    if (!key) {
+      throw new Error(
+        'סטודיו Creative: נבחר Gemini אבל אין מפתח — שמרו מפתח בהגדרות או הגדירו CREATIVE_GEMINI_API_KEY בסביבת השרת'
+      );
+    }
     try {
-      const brief = await briefGemini({ apiKey: key, model: settings.creative_gemini_model, userBlock: block });
+      const { brief, llmRawText, promptFullText } = await briefGemini({
+        apiKey: key,
+        model: settings.creative_gemini_model,
+        userBlock: block
+      });
       return attachDebug(brief, {
         provider: 'gemini',
         model: settings.creative_gemini_model || 'gemini-2.0-flash',
-        userPrompt: block
+        userPrompt: block,
+        llmRawText,
+        promptFullText
       });
     } catch (e) {
       if (isLlmQuotaOrRateLimitError(e)) {
         console.warn('[creative-video] Gemini quota/rate limit; using template brief.');
-        return generateBriefTemplate({ videoDescription, toneId: tone.id, userNotes, production });
+        return generateBriefTemplate({ videoDescription: vd, toneId: tone.id, userNotes, production });
       }
       throw e;
     }
   }
 
-  return generateBriefTemplate({ videoDescription, toneId: tone.id, userNotes, production });
+  return generateBriefTemplate({ videoDescription: vd, toneId: tone.id, userNotes, production });
+}
+
+/** JSON לעריכה בממשק — בלי llm_raw_text (כדי שלא להנפיח את שדה ה-JSON). */
+export function briefJsonForPlanEditor(brief) {
+  try {
+    const copy = JSON.parse(JSON.stringify(brief));
+    if (copy.debug && typeof copy.debug === 'object') {
+      delete copy.debug.llm_raw_text;
+      delete copy.debug.llm_prompt_full_text;
+    }
+    return JSON.stringify(copy, null, 2);
+  } catch {
+    return JSON.stringify(brief, null, 2);
+  }
 }
 
 /** תכנון בלבד — מחזיר בריף + מסמך תכנית בעברית לעריכה בממשק */
