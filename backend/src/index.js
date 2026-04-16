@@ -13,6 +13,8 @@ import { recoverStuckCreativeJobs } from './services/creative/creativeVideoEngin
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3051;
+const serverStartedAt = new Date().toISOString();
+globalThis.__shortvid_server_started_at = serverStartedAt;
 
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));

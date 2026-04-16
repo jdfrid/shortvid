@@ -148,6 +148,8 @@ export default function CreativeStudio() {
     creative_google_tts_key_configured: false,
     creative_google_tts_from_env: false,
     creative_gemini_from_env: false,
+    creative_gemini_video_key_configured: false,
+    creative_gemini_video_from_env: false,
     creative_openai_from_env: false,
     creative_llm_provider_from_env: false
   });
@@ -158,6 +160,7 @@ export default function CreativeStudio() {
   const [shotstackKeyInput, setShotstackKeyInput] = useState('');
   const [shotstackTesting, setShotstackTesting] = useState(false);
   const [googleTtsKeyInput, setGoogleTtsKeyInput] = useState('');
+  const [geminiVideoKeyInput, setGeminiVideoKeyInput] = useState('');
   const [loadedSettings, setLoadedSettings] = useState(null);
   const [activeLogJobId, setActiveLogJobId] = useState(null);
   const [activeLogJob, setActiveLogJob] = useState(null);
@@ -258,6 +261,7 @@ export default function CreativeStudio() {
       if (pexelsKeyInput.trim()) payload.creative_pexels_api_key = pexelsKeyInput.trim();
       if (shotstackKeyInput.trim()) payload.creative_shotstack_api_key = shotstackKeyInput.trim();
       if (googleTtsKeyInput.trim()) payload.creative_google_tts_api_key = googleTtsKeyInput.trim();
+      if (geminiVideoKeyInput.trim()) payload.creative_gemini_video_api_key = geminiVideoKeyInput.trim();
       if (
         (settings.creative_voice_mechanism || '') === 'google_cloud_tts' &&
         !googleTtsKeyInput.trim() &&
@@ -297,6 +301,21 @@ export default function CreativeStudio() {
         setSaving(false);
         return;
       }
+      if (
+        (settings.creative_video_provider || 'shotstack') === 'gemini_video' &&
+        !geminiVideoKeyInput.trim() &&
+        !settings.creative_gemini_video_key_configured &&
+        !settings.creative_gemini_video_from_env &&
+        !settings.creative_gemini_key_configured &&
+        !settings.creative_gemini_from_env
+      ) {
+        setMessage({
+          type: 'error',
+          text: 'נבחר Gemini Video — נא להדביק מפתח Gemini Video API או להגדיר CREATIVE_GEMINI_VIDEO_API_KEY בסביבה.'
+        });
+        setSaving(false);
+        return;
+      }
       if (Object.keys(payload).length === 0) {
         setMessage({ type: 'ok', text: 'לא זוהו שינויים לשמירה.' });
         setSaving(false);
@@ -308,6 +327,7 @@ export default function CreativeStudio() {
       setPexelsKeyInput('');
       setShotstackKeyInput('');
       setGoogleTtsKeyInput('');
+      setGeminiVideoKeyInput('');
       await loadSettings();
       setMessage({ type: 'ok', text: 'הגדרות הסטודיו נשמרו.' });
     } catch (e) {
@@ -523,6 +543,12 @@ export default function CreativeStudio() {
                     : [];
               const logCandidateUrls = logDebug.pexels_candidate_video_urls || job?.pexels_urls || [];
               const logScenes = logBrief?.scenes || [];
+              const voiceMechDbg =
+                String(logDebug.voice_mechanism || settings.creative_voice_mechanism || 'shotstack_tts').toLowerCase();
+              const isGeminiVideoJob =
+                String(logDebug.render_provider || '').toLowerCase() === 'gemini_video' ||
+                String(logDebug.render_provider_requested || '').toLowerCase() === 'gemini_video' ||
+                String(job?.render_provider || '').toLowerCase() === 'gemini_video';
 
               const customerFromJob =
                 job && [job.video_description, job.user_notes].filter(Boolean).join('\n\n').trim();
@@ -678,6 +704,124 @@ export default function CreativeStudio() {
                       <p className="text-midnight-500 text-[11px]">—</p>
                     )}
                   </section>
+
+                  <section className="space-y-1">
+                    <h4 className="text-[11px] font-semibold text-gold-400">סטאטוס קול (תסריט → TTS)</h4>
+                    <p className="text-[11px] text-midnight-400">
+                      מנגנון:&nbsp;
+                      <span className="font-mono">
+                        {voiceMechDbg === 'google_cloud_tts'
+                          ? 'Google Cloud TTS'
+                          : voiceMechDbg === 'captions_only'
+                            ? 'ללא דיבור — כיתובים בלבד'
+                            : 'Shotstack TTS מובנה'}
+                      </span>
+                    </p>
+                    {voiceMechDbg === 'google_cloud_tts' && (
+                      <div className="text-[10px] text-midnight-500 space-y-0.5">
+                        <p>
+                          Voice name:{' '}
+                          <span className="font-mono">
+                            {logDebug.google_tts_voice || settings.creative_google_tts_voice || 'en-US-Neural2-A'}
+                          </span>
+                        </p>
+                        {logDebug.voiceover_audio_public_url && (
+                          <p>
+                            קובץ MP3 ציבורי ל־Shotstack:{' '}
+                            <a
+                              href={logDebug.voiceover_audio_public_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-gold-400 hover:underline break-all"
+                            >
+                              {logDebug.voiceover_audio_public_url}
+                            </a>
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <details className="text-[10px] text-midnight-500">
+                      <summary className="cursor-pointer text-midnight-400 hover:text-midnight-300">
+                        טקסט מלא שנשלח לקול (narration)
+                      </summary>
+                      <pre
+                        dir="auto"
+                        className="mt-1 p-2 bg-midnight-900/70 rounded whitespace-pre-wrap max-h-32 overflow-y-auto text-[10px] text-midnight-100"
+                      >
+                        {narrationText}
+                      </pre>
+                    </details>
+                  </section>
+
+                  {isGeminiVideoJob && (
+                    <section className="space-y-1">
+                      <h4 className="text-[11px] font-semibold text-gold-400">סטאטוס Gemini Video (Veo)</h4>
+                      <p className="text-[10px] text-midnight-400" dir="rtl">
+                        מצב:{' '}
+                        {job?.status === 'completed'
+                          ? 'הופק וידאו בהצלחה.'
+                          : job?.status === 'failed'
+                            ? 'כישלון רינדור (ראו פירוט שגיאה למעלה).'
+                            : 'ממתין/מעבד…'}
+                      </p>
+                      <div className="text-[10px] text-midnight-500 space-y-0.5" dir="ltr">
+                        <p>
+                          model:{' '}
+                          <span className="font-mono">
+                            {logDebug.gemini_video_model || settings.creative_gemini_video_model || 'veo-2.0-generate-001'}
+                          </span>
+                        </p>
+                        {logDebug.gemini_video_operation && (
+                          <p>
+                            operation:{' '}
+                            <span className="font-mono break-all">{logDebug.gemini_video_operation}</span>
+                          </p>
+                        )}
+                        {logDebug.fallback_render_provider && (
+                          <p dir="rtl">
+                            שימוש בפועל בספק:{' '}
+                            <span className="font-mono">{logDebug.fallback_render_provider}</span>{' '}
+                            (התבקש:{' '}
+                            <span className="font-mono">
+                              {logDebug.render_provider_requested || 'gemini_video'}
+                            </span>
+                            )
+                          </p>
+                        )}
+                      </div>
+                      {logDebug.gemini_video_error && (
+                        <p className="text-[10px] text-red-300 whitespace-pre-wrap" dir="ltr">
+                          {logDebug.gemini_video_error}
+                        </p>
+                      )}
+                      {logDebug.gemini_video_prompt && (
+                        <details className="text-[10px] text-midnight-500">
+                          <summary className="cursor-pointer text-midnight-400 hover:text-midnight-300">
+                            פרומפט מלא ל־Gemini Video
+                          </summary>
+                          <pre
+                            dir="ltr"
+                            className="mt-1 p-2 bg-midnight-900/70 rounded whitespace-pre-wrap max-h-40 overflow-y-auto"
+                          >
+                            {logDebug.gemini_video_prompt}
+                          </pre>
+                        </details>
+                      )}
+                      {logDebug.gemini_video_submit_response && (
+                        <details className="text-[10px] text-midnight-500">
+                          <summary className="cursor-pointer text-midnight-400 hover:text-midnight-300">
+                            תשובת API חלקית מ־Gemini Video
+                          </summary>
+                          <pre
+                            dir="ltr"
+                            className="mt-1 p-2 bg-midnight-900/70 rounded whitespace-pre-wrap max-h-40 overflow-y-auto"
+                          >
+                            {logDebug.gemini_video_submit_response}
+                          </pre>
+                        </details>
+                      )}
+                    </section>
+                  )}
 
                   <section className="space-y-1">
                     <h4 className="text-[11px] font-semibold text-gold-400">קובץ סופי</h4>
@@ -1474,6 +1618,31 @@ export default function CreativeStudio() {
             </div>
             {(settings.creative_video_provider || 'shotstack') === 'gemini_video' && (
               <div className="rounded-lg border border-midnight-700/80 bg-midnight-950/40 p-3">
+                {settings.creative_gemini_video_from_env && (
+                  <p className="text-[11px] text-emerald-400 mb-2" dir="rtl">
+                    מפתח Gemini Video פעיל מ־
+                    <code className="text-midnight-200">CREATIVE_GEMINI_VIDEO_API_KEY</code> בסביבה.
+                  </p>
+                )}
+                <div className="mb-3">
+                  <label className="block text-sm text-midnight-300 mb-1">Gemini Video API key</label>
+                  <p className="text-[11px] text-midnight-500 mb-1">
+                    {settings.creative_gemini_video_key_configured || settings.creative_gemini_video_from_env
+                      ? 'מפתח Gemini Video זמין — הדבק רק להחלפה.'
+                      : settings.creative_gemini_key_configured || settings.creative_gemini_from_env
+                        ? 'אין מפתח Video ייעודי, אבל יש מפתח Gemini כללי (fallback). מומלץ להזין מפתח Video ייעודי.'
+                        : 'לא הוגדר מפתח Gemini Video — אפשר להדביק כאן או להגדיר בסביבה.'}
+                  </p>
+                  <input
+                    type="password"
+                    className="input-dark w-full max-w-lg font-mono text-sm"
+                    value={geminiVideoKeyInput}
+                    onChange={e => setGeminiVideoKeyInput(e.target.value)}
+                    placeholder="AIza…"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </div>
                 <label className="block text-sm text-midnight-300 mb-1">Gemini video model</label>
                 <input
                   className="input-dark w-full max-w-lg font-mono text-sm"
@@ -1483,7 +1652,7 @@ export default function CreativeStudio() {
                   spellCheck={false}
                 />
                 <p className="text-[11px] text-midnight-500 mt-1" dir="rtl">
-                  דורש מפתח Gemini פעיל. במסלול זה אין שימוש ב-Pexels/Shotstack — נשלח פרומפט מלא ליצירת וידאו ישירות ב-Gemini.
+                  במסלול זה אין שימוש ב-Pexels/Shotstack — נשלח פרומפט מלא ליצירת וידאו ישירות ב-Gemini.
                 </p>
               </div>
             )}

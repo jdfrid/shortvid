@@ -23,22 +23,26 @@ router.get('/settings', (req, res) => {
     const raw = getCreativeStudioSettings();
     const openaiKey = (raw.creative_openai_api_key || '').trim();
     const geminiKey = (raw.creative_gemini_api_key || '').trim();
+    const geminiVideoKey = (raw.creative_gemini_video_api_key || '').trim();
     const pexelsKey = (raw.creative_pexels_api_key || '').trim();
     const shotstackKey = (raw.creative_shotstack_api_key || '').trim();
     const googleTtsKey = (raw.creative_google_tts_api_key || '').trim();
     const safe = { ...raw };
     delete safe.creative_openai_api_key;
     delete safe.creative_gemini_api_key;
+    delete safe.creative_gemini_video_api_key;
     delete safe.creative_pexels_api_key;
     delete safe.creative_shotstack_api_key;
     delete safe.creative_google_tts_api_key;
     safe.creative_openai_key_configured = openaiKey.length > 0;
     safe.creative_gemini_key_configured = geminiKey.length > 0;
+    safe.creative_gemini_video_key_configured = geminiVideoKey.length > 0;
     safe.creative_pexels_key_configured = pexelsKey.length > 0;
     safe.creative_shotstack_key_configured = shotstackKey.length > 0;
     safe.creative_google_tts_key_configured = googleTtsKey.length > 0;
     safe.creative_google_tts_from_env = !!(process.env.GOOGLE_CLOUD_TTS_API_KEY || '').trim();
     safe.creative_gemini_from_env = !!(process.env.CREATIVE_GEMINI_API_KEY || '').trim();
+    safe.creative_gemini_video_from_env = !!(process.env.CREATIVE_GEMINI_VIDEO_API_KEY || '').trim();
     safe.creative_openai_from_env = !!(process.env.CREATIVE_OPENAI_API_KEY || '').trim();
     safe.creative_llm_provider_from_env = !!(process.env.CREATIVE_LLM_PROVIDER || '').trim();
     res.json(safe);
@@ -56,6 +60,7 @@ router.put('/settings', (req, res) => {
       if (
         key === 'creative_openai_api_key' ||
         key === 'creative_gemini_api_key' ||
+        key === 'creative_gemini_video_api_key' ||
         key === 'creative_pexels_api_key' ||
         key === 'creative_shotstack_api_key' ||
         key === 'creative_google_tts_api_key'

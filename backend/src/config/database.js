@@ -90,6 +90,7 @@ export async function initDatabase() {
   const defaults = [
     ['creative_llm_provider', 'template'],
     ['creative_gemini_api_key', ''],
+    ['creative_gemini_video_api_key', ''],
     ['creative_pexels_api_key', ''],
     ['creative_shotstack_api_key', ''],
     ['creative_gemini_model', 'gemini-2.0-flash'],

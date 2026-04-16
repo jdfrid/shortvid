@@ -3,6 +3,7 @@ import { prepare } from '../../config/database.js';
 const CREATIVE_ENV_OVERRIDES = [
   ['GOOGLE_CLOUD_TTS_API_KEY', 'creative_google_tts_api_key'],
   ['CREATIVE_GEMINI_API_KEY', 'creative_gemini_api_key'],
+  ['CREATIVE_GEMINI_VIDEO_API_KEY', 'creative_gemini_video_api_key'],
   ['CREATIVE_OPENAI_API_KEY', 'creative_openai_api_key'],
   ['CREATIVE_LLM_PROVIDER', 'creative_llm_provider'],
   ['CREATIVE_GEMINI_MODEL', 'creative_gemini_model'],
@@ -14,6 +15,7 @@ const CREATIVE_ENV_OVERRIDES = [
 export const CREATIVE_STUDIO_SETTING_KEYS = [
   'creative_llm_provider',
   'creative_gemini_api_key',
+  'creative_gemini_video_api_key',
   'creative_pexels_api_key',
   'creative_shotstack_api_key',
   'creative_google_tts_api_key',

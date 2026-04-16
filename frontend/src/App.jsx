@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
@@ -27,13 +28,42 @@ function ProtectedRoute({ children, roles }) {
 function StudioLayout({ children }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [meta, setMeta] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/meta');
+        const d = await r.json();
+        if (!cancelled) setMeta(d);
+      } catch {
+        if (!cancelled) setMeta(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b border-midnight-800 bg-midnight-950/80 backdrop-blur-sm">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-gold-400 font-semibold">
-            <Sparkles size={22} />
-            shortvid
+          <div className="flex flex-col items-start">
+            <div className="flex items-center gap-2 text-gold-400 font-semibold">
+              <Sparkles size={22} />
+              shortvid
+            </div>
+            {meta ? (
+              <div className="text-[11px] text-midnight-500 font-mono mt-0.5" dir="ltr">
+                {`v${meta.version} · ${meta.deployedAtHuman}`}
+              </div>
+            ) : (
+              <div className="text-[11px] text-midnight-500 font-mono mt-0.5" dir="ltr">
+                v…
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3 text-sm text-midnight-400">
             <span className="hidden sm:inline truncate max-w-[200px]">{user?.email}</span>

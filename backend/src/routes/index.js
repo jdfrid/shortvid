@@ -1,12 +1,42 @@
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import * as authController from '../controllers/authController.js';
 import creativeRoutes from './creativeRoutes.js';
 import { prepare, getDataRoot } from '../config/database.js';
 
 const router = express.Router();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const backendPkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf-8'));
+
+function pickDeployTimestamp() {
+  // Render has multiple possible env-var names depending on how/when it exposes them.
+  const candidates = [
+    process.env.RENDER_DEPLOY_TIME,
+    process.env.RENDER_CREATED_AT,
+    process.env.RENDER_SERVICE_CREATED_AT,
+    process.env.RENDER_INSTANCE_CREATED_AT,
+    process.env.RENDER_INITIALIZED_AT,
+    process.env.RENDER_START_TIME,
+    process.env.BUILD_CREATED_AT
+  ]
+    .map(v => (v == null ? '' : String(v).trim()))
+    .filter(Boolean);
+
+  for (const c of candidates) {
+    const d = new Date(c);
+    if (Number.isFinite(d.getTime())) return d;
+  }
+
+  // Fallback: time when this Node process started (usually close to deploy time).
+  const fallbackIso = globalThis.__shortvid_server_started_at;
+  const d2 = fallbackIso ? new Date(fallbackIso) : null;
+  if (d2 && Number.isFinite(d2.getTime())) return d2;
+
+  return new Date();
+}
 
 router.get('/health', (req, res) => {
   const xfProto = req.get('x-forwarded-proto');
@@ -16,6 +46,24 @@ router.get('/health', (req, res) => {
     ok: true,
     service: 'shortvid',
     thisOrigin: host ? `${proto}://${host}` : null
+  });
+});
+
+router.get('/meta', (req, res) => {
+  const d = pickDeployTimestamp();
+  res.json({
+    service: 'shortvid',
+    version: backendPkg.version || 'unknown',
+    deployedAtIso: d.toISOString(),
+    deployedAtHuman: d.toLocaleString('en-GB', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    }),
+    gitCommit: process.env.RENDER_GIT_COMMIT || process.env.SOURCE_VERSION || null
   });
 });
 

@@ -59,6 +59,174 @@ function pickTimelineUrls(videoUrls, clipsCount, jobId) {
   return rotated.slice(0, n);
 }
 
+function isGeminiVideoBillingOrPreconditionError(err) {
+  const m = String(err?.message || err || '').toLowerCase();
+  return (
+    m.includes('failed_precondition') ||
+    m.includes('gcp billing') ||
+    m.includes('billing enabled') ||
+    m.includes('google cloud platform billing') ||
+    m.includes('exclusively available to users with') ||
+    m.includes('veo-2.0-generate-001')
+  );
+}
+
+function saveBriefForLog(jobId, brief, debugPatch = null) {
+  const merged =
+    debugPatch && typeof debugPatch === 'object'
+      ? { ...brief, debug: { ...(brief?.debug || {}), ...debugPatch } }
+      : brief;
+  prepare(
+    `
+    UPDATE creative_video_jobs
+    SET brief_json = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `
+  ).run(JSON.stringify(merged), jobId);
+  return merged;
+}
+
+async function runShotstackRenderPipeline({
+  id,
+  row,
+  settings,
+  brief,
+  voiceMech,
+  includeVoiceover,
+  renderProviderLabel = 'shotstack',
+  extraDebug = {}
+}) {
+  let voiceoverAudioUrl = null;
+  if (voiceMech === 'google_cloud_tts') {
+    const gKey = resolveGoogleTtsApiKey(settings);
+    if (!gKey) {
+      throw new Error(
+        'נבחר Google Cloud TTS — הגדר מפתח API בהגדרות הסטודיו או משתנה סביבה GOOGLE_CLOUD_TTS_API_KEY'
+      );
+    }
+    const base = publicAppBaseUrl();
+    if (!base) {
+      throw new Error(
+        'נבחר Google Cloud TTS — חובה כתובת האפליקציה בפומבי: PUBLIC_BASE_URL או RENDER_EXTERNAL_URL (כדי ש־Shotstack יוריד את קובץ הדיבור)'
+      );
+    }
+    const ttsDir = path.join(getDataRoot(), 'creative_tts');
+    const outFile = path.join(ttsDir, `${id}.mp3`);
+    const lang =
+      String(brief.tts_language || 'en-US')
+        .trim()
+        .replace('_', '-')
+        .slice(0, 16) || 'en-US';
+    const voiceName =
+      String(settings.creative_google_tts_voice || 'en-US-Neural2-A').trim() || 'en-US-Neural2-A';
+    await synthesizeToMp3File({ text: brief.narration, voiceName, languageCode: lang, apiKey: gKey }, outFile);
+    voiceoverAudioUrl = `${base}/api/creative/public-tts/${id}`;
+  }
+
+  const pexelsOpts = pexelsSearchOptsFromSettings(settings);
+  const queries = brief.pexels_search_queries.map(q => String(q).trim()).filter(Boolean);
+  const videoUrls = [];
+  const seen = new Set();
+  const pagesUsed = [];
+  const sliceQ = queries.slice(0, 4);
+  for (let qi = 0; qi < sliceQ.length; qi++) {
+    const q = sliceQ[qi];
+    const page = 1 + ((id * 31 + qi * 5) % 8);
+    pagesUsed.push({ query: q, page });
+    const batch = await searchVideoUrls(q, { ...pexelsOpts, page });
+    for (const u of batch) {
+      if (!seen.has(u)) {
+        seen.add(u);
+        videoUrls.push(u);
+      }
+      if (videoUrls.length >= 8) break;
+    }
+    if (videoUrls.length >= 6) break;
+  }
+
+  if (!videoUrls.length) {
+    throw new Error(`Pexels returned no usable ${pexelsOpts.orientation} videos for these queries`);
+  }
+
+  let char = row.character_id ? getCharacterById(row.character_id) : null;
+  if (!char) {
+    const all = getCharacters();
+    char = all[0] || null;
+  }
+  const characterImageUrl = char?.image_url || null;
+
+  const totalDurationSec = 45;
+  const clipsCount = Math.min(5, Math.max(3, Math.ceil(totalDurationSec / 12)));
+  const urlsForTimeline = pickTimelineUrls(videoUrls, clipsCount, id);
+  const segmentLengthSec = totalDurationSec / urlsForTimeline.length;
+
+  const edit = buildVerticalEdit({
+    videoUrls: urlsForTimeline,
+    segmentLengthSec,
+    narration: brief.narration,
+    voice: brief.shotstack_voice || 'Matthew',
+    scenes: (brief.scenes || []).map(s => ({
+      text: s.text,
+      start_sec: s.start_sec,
+      duration_sec: s.duration_sec
+    })),
+    characterImageUrl,
+    totalDurationSec,
+    includeVoiceover,
+    voiceoverAudioUrl
+  });
+
+  const enrichedBrief = {
+    ...brief,
+    debug: {
+      ...(brief.debug || {}),
+      pexels_search_options: pexelsOpts,
+      pexels_pages_used: pagesUsed,
+      pexels_queries_used: queries,
+      pexels_candidate_video_urls: videoUrls,
+      selected_timeline_video_urls: urlsForTimeline,
+      character_image_url: characterImageUrl,
+      segment_length_sec: Number(segmentLengthSec.toFixed(2)),
+      total_duration_sec: totalDurationSec,
+      render_provider: renderProviderLabel,
+      voice_mechanism: voiceMech,
+      include_voiceover: includeVoiceover,
+      google_tts_voice: voiceMech === 'google_cloud_tts' ? settings.creative_google_tts_voice : null,
+      voiceover_audio_public_url: voiceoverAudioUrl,
+      ...extraDebug
+    }
+  };
+
+  prepare(
+    `
+    UPDATE creative_video_jobs SET
+      brief_json = ?,
+      pexels_urls_json = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `
+  ).run(JSON.stringify(enrichedBrief), JSON.stringify(videoUrls), id);
+
+  const renderId = await submitRender(edit);
+  prepare(
+    `
+    UPDATE creative_video_jobs SET external_render_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+  `
+  ).run(renderId, id);
+
+  const { url } = await waitForRender(renderId);
+  prepare(
+    `
+    UPDATE creative_video_jobs SET
+      status = 'completed',
+      output_url = ?,
+      error_message = NULL,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `
+  ).run(url, id);
+}
+
 export function assertCreativePipelineReady() {
   const provider = (setting('creative_video_provider', 'shotstack') || 'shotstack').toLowerCase();
   if (provider === 'shotstack') {
@@ -78,7 +246,7 @@ export function assertCreativePipelineReady() {
     const settings = getCreativeStudioSettings();
     if (!isGeminiVideoConfigured(settings)) {
       throw new Error(
-        'Gemini video is not configured — set CREATIVE_GEMINI_API_KEY in env or save a Gemini key in Studio settings'
+        'Gemini video is not configured — set CREATIVE_GEMINI_VIDEO_API_KEY/CREATIVE_GEMINI_API_KEY in env or save a Gemini key in Studio settings'
       );
     }
     return;
@@ -196,6 +364,7 @@ export async function processCreativeVideoJob(jobId) {
 
     const voiceMech = String(settings.creative_voice_mechanism || 'shotstack_tts').trim().toLowerCase();
     const includeVoiceover = voiceMech !== 'captions_only';
+    saveBriefForLog(id, brief);
 
     if (provider === 'gemini_video') {
       let production = null;
@@ -214,196 +383,106 @@ export async function processCreativeVideoJob(jobId) {
       });
       const geminiApiKey = resolveGeminiApiKey(settings);
       const geminiVideoModel = resolveGeminiVideoModel(settings);
-      const submit = await submitGeminiVideoGeneration({
-        apiKey: geminiApiKey,
-        model: geminiVideoModel,
-        prompt,
-        aspectRatio: '9:16'
+      saveBriefForLog(id, brief, {
+        render_provider: 'gemini_video',
+        gemini_video_model: geminiVideoModel,
+        gemini_video_prompt: prompt
       });
+      try {
+        const submit = await submitGeminiVideoGeneration({
+          apiKey: geminiApiKey,
+          model: geminiVideoModel,
+          prompt,
+          aspectRatio: '9:16'
+        });
 
-      prepare(
-        `
-      UPDATE creative_video_jobs SET
-        external_render_id = ?,
-        brief_json = ?,
-        pexels_urls_json = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `
-      ).run(
-        submit.operationName || null,
-        JSON.stringify({
-          ...brief,
-          debug: {
-            ...(brief.debug || {}),
-            render_provider: 'gemini_video',
-            gemini_video_model: geminiVideoModel,
-            gemini_video_operation: submit.operationName || null,
-            gemini_video_prompt: prompt,
-            gemini_video_submit_response: submit.submitPayload
-              ? JSON.stringify(submit.submitPayload).slice(0, 6000)
-              : null
-          }
-        }),
-        null,
-        id
-      );
-
-      const resolved =
-        submit.url != null
-          ? { url: submit.url, operationPayload: submit.submitPayload }
-          : await waitForGeminiVideo({
-              apiKey: geminiApiKey,
-              operationName: submit.operationName
-            });
-
-      prepare(
-        `
-      UPDATE creative_video_jobs SET
-        status = 'completed',
-        output_url = ?,
-        error_message = NULL,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `
-      ).run(resolved.url, id);
-      return;
-    }
-
-    let voiceoverAudioUrl = null;
-    if (voiceMech === 'google_cloud_tts') {
-      const gKey = resolveGoogleTtsApiKey(settings);
-      if (!gKey) {
-        throw new Error(
-          'נבחר Google Cloud TTS — הגדר מפתח API בהגדרות הסטודיו או משתנה סביבה GOOGLE_CLOUD_TTS_API_KEY'
+        prepare(
+          `
+        UPDATE creative_video_jobs SET
+          external_render_id = ?,
+          brief_json = ?,
+          pexels_urls_json = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `
+        ).run(
+          submit.operationName || null,
+          JSON.stringify({
+            ...brief,
+            debug: {
+              ...(brief.debug || {}),
+              render_provider: 'gemini_video',
+              gemini_video_model: geminiVideoModel,
+              gemini_video_operation: submit.operationName || null,
+              gemini_video_prompt: prompt,
+              gemini_video_submit_response: submit.submitPayload
+                ? JSON.stringify(submit.submitPayload).slice(0, 6000)
+                : null
+            }
+          }),
+          null,
+          id
         );
-      }
-      const base = publicAppBaseUrl();
-      if (!base) {
-        throw new Error(
-          'נבחר Google Cloud TTS — חובה כתובת האפליקציה בפומבי: PUBLIC_BASE_URL או RENDER_EXTERNAL_URL (כדי ש־Shotstack יוריד את קובץ הדיבור)'
-        );
-      }
-      const ttsDir = path.join(getDataRoot(), 'creative_tts');
-      const outFile = path.join(ttsDir, `${id}.mp3`);
-      const lang =
-        String(brief.tts_language || 'en-US')
-          .trim()
-          .replace('_', '-')
-          .slice(0, 16) || 'en-US';
-      const voiceName =
-        String(settings.creative_google_tts_voice || 'en-US-Neural2-A').trim() || 'en-US-Neural2-A';
-      await synthesizeToMp3File(
-        { text: brief.narration, voiceName, languageCode: lang, apiKey: gKey },
-        outFile
-      );
-      voiceoverAudioUrl = `${base}/api/creative/public-tts/${id}`;
-    }
 
-    const pexelsOpts = pexelsSearchOptsFromSettings(settings);
-    const queries = brief.pexels_search_queries.map(q => String(q).trim()).filter(Boolean);
-    const videoUrls = [];
-    const seen = new Set();
-    const pagesUsed = [];
-    const sliceQ = queries.slice(0, 4);
-    for (let qi = 0; qi < sliceQ.length; qi++) {
-      const q = sliceQ[qi];
-      const page = 1 + ((id * 31 + qi * 5) % 8);
-      pagesUsed.push({ query: q, page });
-      const batch = await searchVideoUrls(q, { ...pexelsOpts, page });
-      for (const u of batch) {
-        if (!seen.has(u)) {
-          seen.add(u);
-          videoUrls.push(u);
+        const resolved =
+          submit.url != null
+            ? { url: submit.url, operationPayload: submit.submitPayload }
+            : await waitForGeminiVideo({
+                apiKey: geminiApiKey,
+                operationName: submit.operationName
+              });
+
+        prepare(
+          `
+        UPDATE creative_video_jobs SET
+          status = 'completed',
+          output_url = ?,
+          error_message = NULL,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `
+        ).run(resolved.url, id);
+        return;
+      } catch (geminiErr) {
+        const geminiErrText = String(geminiErr?.message || geminiErr || '').slice(0, 2000);
+        saveBriefForLog(id, brief, {
+          render_provider: 'gemini_video',
+          gemini_video_model: geminiVideoModel,
+          gemini_video_prompt: prompt,
+          gemini_video_error: geminiErrText
+        });
+
+        const canFallbackToShotstack = isPexelsConfigured() && isShotstackConfigured();
+        if (isGeminiVideoBillingOrPreconditionError(geminiErr) && canFallbackToShotstack) {
+          await runShotstackRenderPipeline({
+            id,
+            row,
+            settings,
+            brief,
+            voiceMech,
+            includeVoiceover,
+            renderProviderLabel: 'shotstack_fallback',
+            extraDebug: {
+              render_provider_requested: 'gemini_video',
+              gemini_video_error: geminiErrText,
+              fallback_render_provider: 'shotstack'
+            }
+          });
+          return;
         }
-        if (videoUrls.length >= 8) break;
+        throw geminiErr;
       }
-      if (videoUrls.length >= 6) break;
     }
 
-    if (!videoUrls.length) {
-      throw new Error(
-        `Pexels returned no usable ${pexelsOpts.orientation} videos for these queries`
-      );
-    }
-
-    let char = row.character_id ? getCharacterById(row.character_id) : null;
-    if (!char) {
-      const all = getCharacters();
-      char = all[0] || null;
-    }
-    const characterImageUrl = char?.image_url || null;
-
-    const totalDurationSec = 45;
-    const clipsCount = Math.min(5, Math.max(3, Math.ceil(totalDurationSec / 12)));
-    const urlsForTimeline = pickTimelineUrls(videoUrls, clipsCount, id);
-    const segmentLengthSec = totalDurationSec / urlsForTimeline.length;
-
-    const edit = buildVerticalEdit({
-      videoUrls: urlsForTimeline,
-      segmentLengthSec,
-      narration: brief.narration,
-      voice: brief.shotstack_voice || 'Matthew',
-      scenes: (brief.scenes || []).map(s => ({
-        text: s.text,
-        start_sec: s.start_sec,
-        duration_sec: s.duration_sec
-      })),
-      characterImageUrl,
-      totalDurationSec,
+    await runShotstackRenderPipeline({
+      id,
+      row,
+      settings,
+      brief,
+      voiceMech,
       includeVoiceover,
-      voiceoverAudioUrl
+      renderProviderLabel: provider || 'shotstack'
     });
-
-    const enrichedBrief = {
-      ...brief,
-      debug: {
-        ...(brief.debug || {}),
-        pexels_search_options: pexelsOpts,
-        pexels_pages_used: pagesUsed,
-        pexels_queries_used: queries,
-        pexels_candidate_video_urls: videoUrls,
-        selected_timeline_video_urls: urlsForTimeline,
-        character_image_url: characterImageUrl,
-        segment_length_sec: Number(segmentLengthSec.toFixed(2)),
-        total_duration_sec: totalDurationSec,
-        render_provider: provider || 'shotstack',
-        voice_mechanism: voiceMech,
-        include_voiceover: includeVoiceover,
-        google_tts_voice: voiceMech === 'google_cloud_tts' ? settings.creative_google_tts_voice : null,
-        voiceover_audio_public_url: voiceoverAudioUrl
-      }
-    };
-
-    prepare(
-      `
-      UPDATE creative_video_jobs SET
-        brief_json = ?,
-        pexels_urls_json = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `
-    ).run(JSON.stringify(enrichedBrief), JSON.stringify(videoUrls), id);
-
-    const renderId = await submitRender(edit);
-    prepare(
-      `
-      UPDATE creative_video_jobs SET external_render_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `
-    ).run(renderId, id);
-
-    const { url } = await waitForRender(renderId);
-
-    prepare(
-      `
-      UPDATE creative_video_jobs SET
-        status = 'completed',
-        output_url = ?,
-        error_message = NULL,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `
-    ).run(url, id);
   } catch (e) {
     console.error(`Creative video job ${id} failed:`, e);
     prepare(

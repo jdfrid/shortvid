@@ -48,7 +48,12 @@ function extractVideoUrl(payload) {
 }
 
 export function resolveGeminiApiKey(settings) {
-  return pickFirstString([settings?.creative_gemini_api_key, process.env.CREATIVE_GEMINI_API_KEY]);
+  return pickFirstString([
+    settings?.creative_gemini_video_api_key,
+    process.env.CREATIVE_GEMINI_VIDEO_API_KEY,
+    settings?.creative_gemini_api_key,
+    process.env.CREATIVE_GEMINI_API_KEY
+  ]);
 }
 
 export function resolveGeminiVideoModel(settings) {
