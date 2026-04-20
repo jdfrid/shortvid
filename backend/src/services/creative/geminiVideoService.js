@@ -25,6 +25,20 @@ function clip(text, max = 3000) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+function redactUrlSecrets(u) {
+  return String(u || '')
+    .replace(/([?&]key=)[^&]+/gi, '$1***')
+    .replace(/([?&]access_token=)[^&]+/gi, '$1***');
+}
+
+function previewJson(obj, max = 8000) {
+  try {
+    return JSON.stringify(obj).slice(0, max);
+  } catch {
+    return '';
+  }
+}
+
 /** Find first likely downloadable video URL in unknown response shape. */
 function extractVideoUrl(payload) {
   const queue = [payload];
@@ -104,28 +118,58 @@ Hard constraints:
 
 async function postGenerateVideos({ apiKey, model, prompt, aspectRatio }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateVideos?key=${encodeURIComponent(apiKey)}`;
-  return fetch(url, {
+  const body = {
+    prompt: { text: prompt },
+    config: { numberOfVideos: 1, aspectRatio: aspectRatio || '9:16' }
+  };
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt: { text: prompt },
-      config: { numberOfVideos: 1, aspectRatio: aspectRatio || '9:16' }
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(120000)
   });
+  const text = await res.text();
+  let parsed = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+  return {
+    res,
+    url: redactUrlSecrets(url),
+    requestBody: body,
+    responseText: text,
+    parsed
+  };
 }
 
 async function postPredictLongRunning({ apiKey, model, prompt, aspectRatio }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:predictLongRunning?key=${encodeURIComponent(apiKey)}`;
-  return fetch(url, {
+  const body = {
+    instances: [{ prompt }],
+    parameters: { sampleCount: 1, aspectRatio: aspectRatio || '9:16' }
+  };
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      instances: [{ prompt }],
-      parameters: { sampleCount: 1, aspectRatio: aspectRatio || '9:16' }
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(120000)
   });
+  const text = await res.text();
+  let parsed = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+  return {
+    res,
+    url: redactUrlSecrets(url),
+    requestBody: body,
+    responseText: text,
+    parsed
+  };
 }
 
 /**
@@ -136,39 +180,83 @@ export async function submitGeminiVideoGeneration({ apiKey, model, prompt, aspec
   if (!model) throw new Error('Gemini video: missing model');
   if (!String(prompt || '').trim()) throw new Error('Gemini video: prompt is empty');
 
-  let res = await postGenerateVideos({ apiKey, model, prompt, aspectRatio });
-  let data = await res.json().catch(() => ({}));
+  const httpTraces = [];
+
+  let first = await postGenerateVideos({ apiKey, model, prompt, aspectRatio });
+  httpTraces.push({
+    label: 'Gemini generateVideos',
+    url: first.url,
+    method: 'POST',
+    status: first.res.status,
+    request_body_preview: previewJson(first.requestBody, 8000),
+    response_text_preview: (first.parsed ? previewJson(first.parsed, 8000) : first.responseText).slice(0, 8000)
+  });
+
+  let res = first.res;
+  let data = first.parsed && typeof first.parsed === 'object' ? first.parsed : {};
 
   if (!res.ok && (res.status === 404 || res.status === 400 || res.status === 405)) {
-    res = await postPredictLongRunning({ apiKey, model, prompt, aspectRatio });
-    data = await res.json().catch(() => ({}));
+    const second = await postPredictLongRunning({ apiKey, model, prompt, aspectRatio });
+    httpTraces.push({
+      label: 'Gemini predictLongRunning',
+      url: second.url,
+      method: 'POST',
+      status: second.res.status,
+      request_body_preview: previewJson(second.requestBody, 8000),
+      response_text_preview: (second.parsed ? previewJson(second.parsed, 8000) : second.responseText).slice(0, 8000)
+    });
+    res = second.res;
+    data = second.parsed && typeof second.parsed === 'object' ? second.parsed : {};
   }
 
   if (!res.ok) {
-    throw new Error(`Gemini video submit ${res.status}: ${JSON.stringify(data).slice(0, 500)}`);
+    const e = new Error(`Gemini video submit ${res.status}: ${JSON.stringify(data).slice(0, 500)}`);
+    e.geminiVideoHttpTraces = httpTraces;
+    throw e;
   }
 
   const directUrl = extractVideoUrl(data);
   if (directUrl) {
-    return { url: directUrl, operationName: null, submitPayload: data };
+    return { url: directUrl, operationName: null, submitPayload: data, httpTraces };
   }
 
   const operationName = normalizeOperationName(data?.name || data?.operation?.name || data?.response?.name);
   if (!operationName) {
-    throw new Error(`Gemini video submit: no operation name or video url in response (${JSON.stringify(data).slice(0, 400)})`);
+    const e = new Error(
+      `Gemini video submit: no operation name or video url in response (${JSON.stringify(data).slice(0, 400)})`
+    );
+    e.geminiVideoHttpTraces = httpTraces;
+    throw e;
   }
-  return { operationName, url: null, submitPayload: data };
+  return { operationName, url: null, submitPayload: data, httpTraces };
 }
 
 async function getOperation({ apiKey, operationName }) {
   const op = normalizeOperationName(operationName);
   const url = `https://generativelanguage.googleapis.com/v1beta/${op}?key=${encodeURIComponent(apiKey)}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(`Gemini operation ${res.status}: ${JSON.stringify(data).slice(0, 400)}`);
+  const text = await res.text();
+  let parsed = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
   }
-  return data;
+  if (!res.ok) {
+    const e = new Error(`Gemini operation ${res.status}: ${(parsed ? JSON.stringify(parsed) : text).slice(0, 400)}`);
+    e.geminiVideoHttpTraces = [
+      {
+        label: 'Gemini operation poll',
+        url: redactUrlSecrets(url),
+        method: 'GET',
+        status: res.status,
+        request_body_preview: '',
+        response_text_preview: (parsed ? previewJson(parsed, 8000) : text).slice(0, 8000)
+      }
+    ];
+    throw e;
+  }
+  return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
 export async function waitForGeminiVideo({ apiKey, operationName, maxWaitMs = 20 * 60 * 1000, intervalMs = 7000 }) {

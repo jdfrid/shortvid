@@ -17,6 +17,20 @@ export function publicAppBaseUrl() {
   return u;
 }
 
+function redactUrlSecrets(u) {
+  return String(u || '')
+    .replace(/([?&]key=)[^&]+/gi, '$1***')
+    .replace(/([?&]access_token=)[^&]+/gi, '$1***');
+}
+
+function previewJson(obj, max = 8000) {
+  try {
+    return JSON.stringify(obj).slice(0, max);
+  } catch {
+    return '';
+  }
+}
+
 /**
  * @param {{ text: string, voiceName: string, languageCode: string, apiKey: string }} opts
  * @param {string} outPath absolute path to .mp3
@@ -45,15 +59,33 @@ export async function synthesizeToMp3File(opts, outPath) {
     signal: AbortSignal.timeout(120000)
   });
 
+  const httpTrace = {
+    label: 'Google Cloud Text-to-Speech synthesize',
+    url: redactUrlSecrets(url),
+    method: 'POST',
+    status: res.status,
+    request_body_preview: previewJson(body, 8000),
+    response_text_preview: ''
+  };
+
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Google TTS: ${res.status} — ${err.slice(0, 280)}`);
+    httpTrace.response_text_preview = err.slice(0, 8000);
+    const e = new Error(`Google TTS: ${res.status} — ${err.slice(0, 280)}`);
+    e.googleTtsHttpTrace = httpTrace;
+    throw e;
   }
 
   const data = await res.json();
   const b64 = data.audioContent;
   if (!b64) throw new Error('Google TTS: תשובה ריקה');
 
+  httpTrace.response_text_preview = previewJson(
+    { audioContent: `${String(b64).slice(0, 48)}…(base64, ${String(b64).length} chars)` },
+    8000
+  );
+
   await mkdir(path.dirname(outPath), { recursive: true });
   await writeFile(outPath, Buffer.from(b64, 'base64'));
+  return { googleTtsHttpTrace: httpTrace };
 }

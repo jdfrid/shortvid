@@ -95,6 +95,50 @@ ${String(brief?.production_notes || '').trim() || '(—)'}
 `;
 }
 
+const DEBUG_KEYS_TO_KEEP = new Set([
+  'llm_provider',
+  'llm_model',
+  'prompt_user_block',
+  'llm_raw_text',
+  'llm_prompt_full_text',
+  'llm_http_trace',
+  'gemini_script_http_trace',
+  'gemini_video_model',
+  'gemini_video_operation',
+  'gemini_video_prompt',
+  'gemini_video_submit_response',
+  'gemini_video_http_trace',
+  'gemini_video_error',
+  'render_provider',
+  'render_provider_requested',
+  'fallback_render_provider',
+  'voice_mechanism',
+  'include_voiceover',
+  'google_tts_voice',
+  'voiceover_audio_public_url',
+  'google_tts_http_trace'
+]);
+
+function pickSafeDebugFromClient(debug) {
+  if (!debug || typeof debug !== 'object') return {};
+  const out = {};
+  for (const [k, v] of Object.entries(debug)) {
+    if (!DEBUG_KEYS_TO_KEEP.has(k)) continue;
+    if (typeof v === 'string') {
+      out[k] = v.slice(0, 120_000);
+    } else if (typeof v === 'number' || typeof v === 'boolean' || v === null) {
+      out[k] = v;
+    } else {
+      try {
+        out[k] = JSON.stringify(v).slice(0, 120_000);
+      } catch {
+        /* skip */
+      }
+    }
+  }
+  return out;
+}
+
 /** Strip client-supplied debug; keep render fields. */
 export function sanitizeApprovedBriefJson(raw) {
   let p;
@@ -116,6 +160,10 @@ export function sanitizeApprovedBriefJson(raw) {
   }
   if (!Array.isArray(p.scenes)) p.scenes = [];
   p.narration = p.narration.replace(/\s+/g, ' ').trim().slice(0, 4500);
-  const { debug: _d, ...rest } = p;
+  const { debug: clientDebug, ...rest } = p;
+  const safeDebug = pickSafeDebugFromClient(clientDebug);
+  if (Object.keys(safeDebug).length) {
+    return { ...rest, debug: safeDebug };
+  }
   return rest;
 }

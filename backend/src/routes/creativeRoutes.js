@@ -195,6 +195,7 @@ router.post('/plan', async (req, res) => {
       briefJson: briefJsonForPlanEditor(brief),
       llmRawText: brief.debug?.llm_raw_text ?? null,
       llmPromptFullText: brief.debug?.llm_prompt_full_text ?? null,
+      llmHttpTrace: brief.debug?.llm_http_trace ?? null,
       llmProvider: brief.debug?.llm_provider ?? null
     });
   } catch (e) {

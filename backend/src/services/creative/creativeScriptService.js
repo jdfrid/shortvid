@@ -112,6 +112,20 @@ function isLlmQuotaOrRateLimitError(err) {
   );
 }
 
+function redactUrlSecrets(u) {
+  return String(u || '')
+    .replace(/([?&]key=)[^&]+/gi, '$1***')
+    .replace(/([?&]access_token=)[^&]+/gi, '$1***');
+}
+
+function previewJson(obj, max = 6000) {
+  try {
+    return JSON.stringify(obj).slice(0, max);
+  } catch {
+    return '';
+  }
+}
+
 function parseBrief(raw, label) {
   let p;
   try {
@@ -177,31 +191,45 @@ function extractGeminiResponseText(data) {
 async function briefOpenAI({ apiKey, model, userBlock }) {
   const systemText = `You are a senior short-form video producer. ${BRIEF_SCHEMA}`;
   const userText = String(userBlock || '');
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const requestBody = {
+    model: model || 'gpt-4o-mini',
+    response_format: { type: 'json_object' },
+    temperature: 0.85,
+    messages: [
+      { role: 'system', content: systemText },
+      { role: 'user', content: userText }
+    ]
+  };
+  const url = 'https://api.openai.com/v1/chat/completions';
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      model: model || 'gpt-4o-mini',
-      response_format: { type: 'json_object' },
-      temperature: 0.85,
-      messages: [
-        { role: 'system', content: systemText },
-        { role: 'user', content: userText }
-      ]
-    })
+    body: JSON.stringify(requestBody)
   });
+  const httpTrace = {
+    label: 'OpenAI chat/completions',
+    url: redactUrlSecrets(url),
+    method: 'POST',
+    status: res.status,
+    request_body_preview: previewJson(requestBody, 8000),
+    response_text_preview: ''
+  };
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`OpenAI chat error ${res.status}: ${err.slice(0, 300)}`);
+    httpTrace.response_text_preview = err.slice(0, 8000);
+    const e = new Error(`OpenAI chat error ${res.status}: ${err.slice(0, 300)}`);
+    e.httpTrace = httpTrace;
+    throw e;
   }
   const data = await res.json();
   const raw = data.choices?.[0]?.message?.content;
   if (!raw) throw new Error('OpenAI returned empty content');
+  httpTrace.response_text_preview = previewJson(data, 8000);
   const promptFullText = `OPENAI CHAT REQUEST\n--- SYSTEM ---\n${systemText}\n\n--- USER ---\n${userText}`;
-  return { brief: parseBrief(raw, 'OpenAI'), llmRawText: String(raw), promptFullText };
+  return { brief: parseBrief(raw, 'OpenAI'), llmRawText: String(raw), promptFullText, httpTrace };
 }
 
 async function briefGemini({ apiKey, model, userBlock }) {
@@ -245,31 +273,62 @@ ${BRIEF_SCHEMA}`;
     generationConfig
   };
 
-  const post = async body =>
-    fetch(url, {
+  const httpTraces = [];
+
+  const post = async (label, body) => {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120000)
     });
+    const text = await res.text();
+    let parsed = null;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      parsed = null;
+    }
+    httpTraces.push({
+      label,
+      url: redactUrlSecrets(url),
+      method: 'POST',
+      status: res.status,
+      request_body_preview: previewJson(body, 8000),
+      response_text_preview: (parsed ? previewJson(parsed, 8000) : text).slice(0, 8000)
+    });
+    return { res, parsed, text };
+  };
 
-  let res = await post(bodyWithSystem);
-  let data = await res.json().catch(() => ({}));
+  let first = await post('Gemini generateContent (systemInstruction)', bodyWithSystem);
+  let res = first.res;
+  let data = first.parsed && typeof first.parsed === 'object' ? first.parsed : {};
 
   if (!res.ok && res.status === 400) {
-    console.warn('[creative-video] Gemini request with systemInstruction failed; retrying combined user message:', JSON.stringify(data).slice(0, 280));
-    res = await post(bodyFallback);
-    data = await res.json().catch(() => ({}));
+    console.warn(
+      '[creative-video] Gemini request with systemInstruction failed; retrying combined user message:',
+      JSON.stringify(data).slice(0, 280)
+    );
+    const second = await post('Gemini generateContent (combined user)', bodyFallback);
+    res = second.res;
+    data = second.parsed && typeof second.parsed === 'object' ? second.parsed : {};
   }
 
   if (!res.ok) {
-    throw new Error(`Gemini error ${res.status}: ${JSON.stringify(data).slice(0, 450)}`);
+    const e = new Error(`Gemini error ${res.status}: ${JSON.stringify(data).slice(0, 450)}`);
+    e.geminiHttpTraces = httpTraces;
+    throw e;
   }
 
   const extracted = extractGeminiResponseText(data);
   const rawForParse = unwrapJsonFence(extracted);
   const promptFullText = `GEMINI REQUEST\n--- SYSTEM INSTRUCTION ---\n${systemText}\n\n--- USER CONTENT ---\n${userText}`;
-  return { brief: parseBrief(rawForParse, 'Gemini'), llmRawText: extracted, promptFullText };
+  return {
+    brief: parseBrief(rawForParse, 'Gemini'),
+    llmRawText: extracted,
+    promptFullText,
+    geminiHttpTraces: httpTraces
+  };
 }
 
 function userBlock({ videoDescription, toneId, userNotes, toneHint, productionPackText }) {
@@ -280,7 +339,10 @@ function userBlock({ videoDescription, toneId, userNotes, toneHint, productionPa
 
 const LLM_RAW_MAX = 240_000;
 
-function attachDebug(brief, { provider, model, userPrompt, llmRawText, promptFullText }) {
+function attachDebug(
+  brief,
+  { provider, model, userPrompt, llmRawText, promptFullText, httpTrace, geminiHttpTraces }
+) {
   const raw =
     llmRawText != null && String(llmRawText).trim()
       ? String(llmRawText).slice(0, LLM_RAW_MAX)
@@ -289,6 +351,9 @@ function attachDebug(brief, { provider, model, userPrompt, llmRawText, promptFul
     promptFullText != null && String(promptFullText).trim()
       ? String(promptFullText).slice(0, LLM_RAW_MAX)
       : undefined;
+  const traces = [];
+  if (httpTrace) traces.push(httpTrace);
+  if (Array.isArray(geminiHttpTraces) && geminiHttpTraces.length) traces.push(...geminiHttpTraces);
   return {
     ...brief,
     debug: {
@@ -297,7 +362,8 @@ function attachDebug(brief, { provider, model, userPrompt, llmRawText, promptFul
       llm_model: model || null,
       prompt_user_block: userPrompt,
       ...(raw != null ? { llm_raw_text: raw } : {}),
-      ...(fullPrompt != null ? { llm_prompt_full_text: fullPrompt } : {})
+      ...(fullPrompt != null ? { llm_prompt_full_text: fullPrompt } : {}),
+      ...(traces.length ? { llm_http_trace: JSON.stringify(traces).slice(0, LLM_RAW_MAX) } : {})
     }
   };
 }
@@ -372,7 +438,7 @@ export async function generateCreativeBrief(settings, { videoDescription, toneId
     const key = (settings.creative_openai_api_key || '').trim();
     if (!key) throw new Error('Creative studio: OpenAI selected but no API key configured');
     try {
-      const { brief, llmRawText, promptFullText } = await briefOpenAI({
+      const { brief, llmRawText, promptFullText, httpTrace } = await briefOpenAI({
         apiKey: key,
         model: settings.creative_openai_model,
         userBlock: block
@@ -382,7 +448,8 @@ export async function generateCreativeBrief(settings, { videoDescription, toneId
         model: settings.creative_openai_model || 'gpt-4o-mini',
         userPrompt: block,
         llmRawText,
-        promptFullText
+        promptFullText,
+        httpTrace
       });
     } catch (e) {
       if (isLlmQuotaOrRateLimitError(e)) {
@@ -401,7 +468,7 @@ export async function generateCreativeBrief(settings, { videoDescription, toneId
       );
     }
     try {
-      const { brief, llmRawText, promptFullText } = await briefGemini({
+      const { brief, llmRawText, promptFullText, geminiHttpTraces } = await briefGemini({
         apiKey: key,
         model: settings.creative_gemini_model,
         userBlock: block
@@ -411,7 +478,8 @@ export async function generateCreativeBrief(settings, { videoDescription, toneId
         model: settings.creative_gemini_model || 'gemini-2.0-flash',
         userPrompt: block,
         llmRawText,
-        promptFullText
+        promptFullText,
+        geminiHttpTraces
       });
     } catch (e) {
       if (isLlmQuotaOrRateLimitError(e)) {
@@ -432,6 +500,7 @@ export function briefJsonForPlanEditor(brief) {
     if (copy.debug && typeof copy.debug === 'object') {
       delete copy.debug.llm_raw_text;
       delete copy.debug.llm_prompt_full_text;
+      delete copy.debug.llm_http_trace;
     }
     return JSON.stringify(copy, null, 2);
   } catch {

@@ -81,6 +81,18 @@ function normalizeCreateJobId(res) {
   return Number.isFinite(n) ? n : null;
 }
 
+function prettyMaybeJson(value) {
+  if (value == null) return '';
+  const s = typeof value === 'string' ? value : String(value);
+  const t = s.trim();
+  if (!t) return '';
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return s;
+  }
+}
+
 export default function CreativeStudio() {
   const [tab, setTab] = useState('brief');
   const [loading, setLoading] = useState(true);
@@ -120,6 +132,7 @@ export default function CreativeStudio() {
   const [planPromptFull, setPlanPromptFull] = useState('');
   const [planLlmRaw, setPlanLlmRaw] = useState('');
   const [planLlmProvider, setPlanLlmProvider] = useState('');
+  const [planLlmHttpTrace, setPlanLlmHttpTrace] = useState('');
   const [hasPlanned, setHasPlanned] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [creatingVideo, setCreatingVideo] = useState(false);
@@ -374,6 +387,7 @@ export default function CreativeStudio() {
   const handlePlanVideo = async () => {
     setMessage(null);
     setPlanning(true);
+    setPlanLlmHttpTrace('');
     try {
       if ((creativeDesc || '').trim().length < 8) {
         setMessage({ type: 'error', text: 'תיאור הסרטון קצר מדי (לפחות 8 תווים).' });
@@ -391,6 +405,7 @@ export default function CreativeStudio() {
       setPlanPromptFull(res.llmPromptFullText || res.brief?.debug?.llm_prompt_full_text || '');
       setPlanLlmRaw(res.llmRawText || res.brief?.debug?.llm_raw_text || '');
       setPlanLlmProvider(res.llmProvider || res.brief?.debug?.llm_provider || '');
+      setPlanLlmHttpTrace(res.llmHttpTrace || res.brief?.debug?.llm_http_trace || '');
       setHasPlanned(true);
       setMessage({
         type: 'ok',
@@ -611,6 +626,19 @@ export default function CreativeStudio() {
                         </pre>
                       </details>
                     )}
+                    {logDebug.llm_http_trace && (
+                      <details className="text-[10px] text-midnight-500">
+                        <summary className="cursor-pointer text-midnight-400 hover:text-midnight-300">
+                          לוג HTTP לתסריט (מה נשלח / מה חזר)
+                        </summary>
+                        <pre
+                          dir="ltr"
+                          className="mt-1 p-2 bg-midnight-900/70 rounded whitespace-pre-wrap max-h-48 overflow-y-auto text-[10px] text-midnight-100"
+                        >
+                          {prettyMaybeJson(logDebug.llm_http_trace)}
+                        </pre>
+                      </details>
+                    )}
                   </section>
 
                   <section className="space-y-1">
@@ -751,6 +779,19 @@ export default function CreativeStudio() {
                         {narrationText}
                       </pre>
                     </details>
+                    {logDebug.google_tts_http_trace && (
+                      <details className="text-[10px] text-midnight-500">
+                        <summary className="cursor-pointer text-midnight-400 hover:text-midnight-300">
+                          לוג HTTP לקול (Google Cloud TTS)
+                        </summary>
+                        <pre
+                          dir="ltr"
+                          className="mt-1 p-2 bg-midnight-900/70 rounded whitespace-pre-wrap max-h-48 overflow-y-auto text-[10px] text-midnight-100"
+                        >
+                          {prettyMaybeJson(logDebug.google_tts_http_trace)}
+                        </pre>
+                      </details>
+                    )}
                   </section>
 
                   {isGeminiVideoJob && (
@@ -817,6 +858,19 @@ export default function CreativeStudio() {
                             className="mt-1 p-2 bg-midnight-900/70 rounded whitespace-pre-wrap max-h-40 overflow-y-auto"
                           >
                             {logDebug.gemini_video_submit_response}
+                          </pre>
+                        </details>
+                      )}
+                      {logDebug.gemini_video_http_trace && (
+                        <details className="text-[10px] text-midnight-500">
+                          <summary className="cursor-pointer text-midnight-400 hover:text-midnight-300">
+                            לוג HTTP ל־Gemini Video (מה נשלח / מה חזר)
+                          </summary>
+                          <pre
+                            dir="ltr"
+                            className="mt-1 p-2 bg-midnight-900/70 rounded whitespace-pre-wrap max-h-48 overflow-y-auto text-[10px] text-midnight-100"
+                          >
+                            {prettyMaybeJson(logDebug.gemini_video_http_trace)}
                           </pre>
                         </details>
                       )}
@@ -1192,6 +1246,19 @@ export default function CreativeStudio() {
                     ? ` · ${settings.creative_openai_model}`
                     : ''}
                 </p>
+              ) : null}
+              {hasPlanned && planLlmHttpTrace ? (
+                <details className="text-[10px] text-midnight-500 mt-2">
+                  <summary className="cursor-pointer text-midnight-400 hover:text-midnight-300" dir="rtl">
+                    לוג HTTP לתסריט (מה נשלח / מה חזר)
+                  </summary>
+                  <pre
+                    dir="ltr"
+                    className="mt-2 p-2 bg-midnight-900/70 rounded whitespace-pre-wrap max-h-56 overflow-y-auto text-[10px] text-midnight-100"
+                  >
+                    {prettyMaybeJson(planLlmHttpTrace)}
+                  </pre>
+                </details>
               ) : null}
             </div>
 

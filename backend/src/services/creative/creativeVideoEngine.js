@@ -97,6 +97,7 @@ async function runShotstackRenderPipeline({
   extraDebug = {}
 }) {
   let voiceoverAudioUrl = null;
+  let googleTtsHttpTraceJson = null;
   if (voiceMech === 'google_cloud_tts') {
     const gKey = resolveGoogleTtsApiKey(settings);
     if (!gKey) {
@@ -119,8 +120,14 @@ async function runShotstackRenderPipeline({
         .slice(0, 16) || 'en-US';
     const voiceName =
       String(settings.creative_google_tts_voice || 'en-US-Neural2-A').trim() || 'en-US-Neural2-A';
-    await synthesizeToMp3File({ text: brief.narration, voiceName, languageCode: lang, apiKey: gKey }, outFile);
+    const ttsMeta = await synthesizeToMp3File(
+      { text: brief.narration, voiceName, languageCode: lang, apiKey: gKey },
+      outFile
+    );
     voiceoverAudioUrl = `${base}/api/creative/public-tts/${id}`;
+    if (ttsMeta?.googleTtsHttpTrace) {
+      googleTtsHttpTraceJson = JSON.stringify([ttsMeta.googleTtsHttpTrace]).slice(0, 120_000);
+    }
   }
 
   const pexelsOpts = pexelsSearchOptsFromSettings(settings);
@@ -193,6 +200,7 @@ async function runShotstackRenderPipeline({
       include_voiceover: includeVoiceover,
       google_tts_voice: voiceMech === 'google_cloud_tts' ? settings.creative_google_tts_voice : null,
       voiceover_audio_public_url: voiceoverAudioUrl,
+      ...(googleTtsHttpTraceJson ? { google_tts_http_trace: googleTtsHttpTraceJson } : {}),
       ...extraDebug
     }
   };
@@ -417,6 +425,9 @@ export async function processCreativeVideoJob(jobId) {
               gemini_video_prompt: prompt,
               gemini_video_submit_response: submit.submitPayload
                 ? JSON.stringify(submit.submitPayload).slice(0, 6000)
+                : null,
+              gemini_video_http_trace: submit.httpTraces
+                ? JSON.stringify(submit.httpTraces).slice(0, 120_000)
                 : null
             }
           }),
@@ -445,11 +456,13 @@ export async function processCreativeVideoJob(jobId) {
         return;
       } catch (geminiErr) {
         const geminiErrText = String(geminiErr?.message || geminiErr || '').slice(0, 2000);
+        const traces = Array.isArray(geminiErr?.geminiVideoHttpTraces) ? geminiErr.geminiVideoHttpTraces : [];
         saveBriefForLog(id, brief, {
           render_provider: 'gemini_video',
           gemini_video_model: geminiVideoModel,
           gemini_video_prompt: prompt,
-          gemini_video_error: geminiErrText
+          gemini_video_error: geminiErrText,
+          ...(traces.length ? { gemini_video_http_trace: JSON.stringify(traces).slice(0, 120_000) } : {})
         });
 
         const canFallbackToShotstack = isPexelsConfigured() && isShotstackConfigured();
@@ -485,15 +498,47 @@ export async function processCreativeVideoJob(jobId) {
     });
   } catch (e) {
     console.error(`Creative video job ${id} failed:`, e);
-    prepare(
+    const errText = String(e.message || e).slice(0, 2000);
+    try {
+      const row2 = prepare(`SELECT brief_json FROM creative_video_jobs WHERE id = ?`).get(id);
+      let base = {};
+      if (row2?.brief_json) {
+        try {
+          base = JSON.parse(row2.brief_json);
+        } catch {
+          base = {};
+        }
+      }
+      const merged = {
+        ...(base && typeof base === 'object' ? base : {}),
+        debug: {
+          ...((base && typeof base === 'object' && base.debug && typeof base.debug === 'object') ? base.debug : {}),
+          job_failed_at: new Date().toISOString(),
+          job_error_message: errText
+        }
+      };
+      prepare(
+        `
+        UPDATE creative_video_jobs SET
+          status = 'failed',
+          error_message = ?,
+          brief_json = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
       `
-      UPDATE creative_video_jobs SET
-        status = 'failed',
-        error_message = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `
-    ).run(String(e.message || e).slice(0, 2000), id);
+      ).run(errText, JSON.stringify(merged), id);
+    } catch (mergeErr) {
+      console.warn(`Creative video job ${id}: failed to persist brief_json on error:`, mergeErr?.message || mergeErr);
+      prepare(
+        `
+        UPDATE creative_video_jobs SET
+          status = 'failed',
+          error_message = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `
+      ).run(errText, id);
+    }
     throw e;
   }
 }
