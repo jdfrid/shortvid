@@ -7,9 +7,46 @@
 import { prepare } from '../../config/database.js';
 
 function baseUrl() {
+  const explicit = (process.env.SHOTSTACK_BASE_URL || '').trim().replace(/\/$/, '');
+  if (explicit) return explicit;
   const host = (process.env.SHOTSTACK_HOST || 'api.shotstack.io').replace(/^https?:\/\//, '');
   const ver = (process.env.SHOTSTACK_EDIT_VERSION || 'v1').trim();
   return `https://${host}/edit/${ver}`;
+}
+
+function candidateBaseUrls() {
+  const first = baseUrl();
+  const out = [first];
+  // If no explicit override, try common stage/prod endpoint variants.
+  if (!(process.env.SHOTSTACK_BASE_URL || '').trim()) {
+    out.push('https://api.shotstack.io/edit/stage');
+    out.push('https://api.shotstack.io/stage/edit/v1');
+  }
+  return [...new Set(out.map(s => String(s || '').trim().replace(/\/$/, '')).filter(Boolean))];
+}
+
+function packRenderRef(base, id) {
+  try {
+    const b = Buffer.from(String(base || ''), 'utf8').toString('base64url');
+    return `b64:${b}:${id}`;
+  } catch {
+    return String(id);
+  }
+}
+
+function unpackRenderRef(ref) {
+  const raw = String(ref || '').trim();
+  if (!raw.startsWith('b64:')) return { base: baseUrl(), id: raw };
+  const p = raw.indexOf(':', 4);
+  if (p < 0) return { base: baseUrl(), id: raw };
+  const b64 = raw.slice(4, p);
+  const id = raw.slice(p + 1);
+  try {
+    const b = Buffer.from(b64, 'base64url').toString('utf8');
+    return { base: b || baseUrl(), id };
+  } catch {
+    return { base: baseUrl(), id };
+  }
 }
 
 /** @param {string} [override] non-empty = use only this (e.g. test before save) */
@@ -38,25 +75,30 @@ export async function testShotstackApiKey(optionalOverride) {
     );
   }
   const fakeId = '00000000-0000-0000-0000-000000000001';
-  const res = await fetch(`${baseUrl()}/render/${encodeURIComponent(fakeId)}`, {
-    headers: {
-      Accept: 'application/json',
-      'x-api-key': key
-    },
-    signal: AbortSignal.timeout(15000)
-  });
-  const data = await res.json().catch(() => ({}));
-  if (res.status === 401 || res.status === 403) {
-    throw new Error('מפתח Shotstack לא תקין או חסר הרשאה.');
+  let authDenied = 0;
+  for (const b of candidateBaseUrls()) {
+    const res = await fetch(`${b}/render/${encodeURIComponent(fakeId)}`, {
+      headers: {
+        Accept: 'application/json',
+        'x-api-key': key
+      },
+      signal: AbortSignal.timeout(15000)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401 || res.status === 403) {
+      authDenied++;
+      continue;
+    }
+    if (res.status === 404 || res.status === 400 || res.ok) {
+      return { ok: true, note: 'auth_ok', base_url: b };
+    }
+    const msg = data?.message || JSON.stringify(data).slice(0, 240);
+    throw new Error(`Shotstack ${res.status}: ${msg}`);
   }
-  if (res.status === 404 || res.status === 400) {
-    return { ok: true, note: 'auth_ok' };
+  if (authDenied > 0) {
+    throw new Error('מפתח Shotstack לא תקין/חסר הרשאת queue, או שאינו תואם לסביבת endpoint (stage/production).');
   }
-  if (res.ok) {
-    return { ok: true };
-  }
-  const msg = data?.message || JSON.stringify(data).slice(0, 240);
-  throw new Error(`Shotstack ${res.status}: ${msg}`);
+  throw new Error('לא הצלחנו לאמת חיבור ל-Shotstack.');
 }
 
 /**
@@ -214,30 +256,35 @@ export async function submitRender(editPayload) {
       'SHOTSTACK_API_KEY is not set — add env var or save key in Studio settings'
     );
   }
+  let lastErr = null;
+  for (const b of candidateBaseUrls()) {
+    const res = await fetch(`${b}/render`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key
+      },
+      body: JSON.stringify(editPayload),
+      signal: AbortSignal.timeout(60000)
+    });
 
-  const res = await fetch(`${baseUrl()}/render`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': key
-    },
-    body: JSON.stringify(editPayload),
-    signal: AbortSignal.timeout(60000)
-  });
-
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = data?.message || JSON.stringify(data).slice(0, 400);
-    throw new Error(`Shotstack queue failed ${res.status}: ${msg}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data?.message || JSON.stringify(data).slice(0, 400);
+      lastErr = `Shotstack queue failed ${res.status}: ${msg} (endpoint: ${b})`;
+      continue;
+    }
+    const id = data?.response?.id;
+    if (!id) throw new Error('Shotstack did not return render id');
+    return packRenderRef(b, String(id));
   }
-  const id = data?.response?.id;
-  if (!id) throw new Error('Shotstack did not return render id');
-  return String(id);
+  throw new Error(lastErr || 'Shotstack queue failed on all known endpoints');
 }
 
 export async function getRenderStatus(renderId) {
   const key = resolveShotstackApiKey();
-  const res = await fetch(`${baseUrl()}/render/${encodeURIComponent(renderId)}`, {
+  const { base, id } = unpackRenderRef(renderId);
+  const res = await fetch(`${base}/render/${encodeURIComponent(id)}`, {
     headers: {
       Accept: 'application/json',
       'x-api-key': key
