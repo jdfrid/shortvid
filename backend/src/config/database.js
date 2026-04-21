@@ -71,6 +71,20 @@ export async function initDatabase() {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_creative_jobs_status ON creative_video_jobs(status, created_at)`);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS shotstack_script_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      script_text TEXT NOT NULL,
+      render_id TEXT,
+      output_url TEXT,
+      error_message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_shotstack_script_jobs_status ON shotstack_script_jobs(status, created_at)`);
+
   try {
     db.run('ALTER TABLE creative_video_jobs ADD COLUMN production_input_json TEXT');
   } catch {

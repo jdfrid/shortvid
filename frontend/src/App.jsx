@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
 import CreativeStudio from './pages/CreativeStudio';
 import GeminiScriptOnly from './pages/GeminiScriptOnly';
+import ShotstackScriptVideoPage from './pages/ShotstackScriptVideoPage';
 import { LogOut, Sparkles } from 'lucide-react';
 
 function ProtectedRoute({ children, roles }) {
@@ -97,6 +98,16 @@ export default function App() {
           element={
             <ProtectedRoute roles={['admin', 'editor']}>
               <StudioLayout>
+                <ShotstackScriptVideoPage />
+              </StudioLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/script-only"
+          element={
+            <ProtectedRoute roles={['admin', 'editor']}>
+              <StudioLayout>
                 <GeminiScriptOnly />
               </StudioLayout>
             </ProtectedRoute>
@@ -108,6 +119,16 @@ export default function App() {
             <ProtectedRoute roles={['admin', 'editor']}>
               <StudioLayout>
                 <CreativeStudio />
+              </StudioLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/shotstack-script"
+          element={
+            <ProtectedRoute roles={['admin', 'editor']}>
+              <StudioLayout>
+                <ShotstackScriptVideoPage />
               </StudioLayout>
             </ProtectedRoute>
           }

@@ -131,6 +131,17 @@ class ApiService {
   async retryCreativeVideoJob(jobId) {
     return this.request(`/creative/jobs/${jobId}/retry`, { method: 'POST', body: JSON.stringify({}) });
   }
+
+  async createShotstackScriptVideoJob(scriptText) {
+    return this.request('/shotstack-script/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ scriptText })
+    });
+  }
+
+  async getShotstackScriptVideoJob(jobId) {
+    return this.request(`/shotstack-script/jobs/${jobId}`);
+  }
 }
 
 export default new ApiService();
