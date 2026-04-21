@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
 import CreativeStudio from './pages/CreativeStudio';
+import GeminiScriptOnly from './pages/GeminiScriptOnly';
 import { LogOut, Sparkles } from 'lucide-react';
 
 function ProtectedRoute({ children, roles }) {
@@ -93,6 +94,16 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route
           path="/"
+          element={
+            <ProtectedRoute roles={['admin', 'editor']}>
+              <StudioLayout>
+                <GeminiScriptOnly />
+              </StudioLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/studio"
           element={
             <ProtectedRoute roles={['admin', 'editor']}>
               <StudioLayout>

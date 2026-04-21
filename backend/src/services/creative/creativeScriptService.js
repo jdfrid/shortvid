@@ -519,3 +519,39 @@ export async function planCreativeVideo(settings, ctx) {
   });
   return { brief, planDocument };
 }
+
+/**
+ * Minimal Gemini-only script generation:
+ * input text -> Gemini -> narration script text.
+ */
+export async function generateGeminiScriptOnly(settings, { videoDescription }) {
+  const vd = String(videoDescription || '').trim();
+  if (vd.length < 8) {
+    throw new Error('תיאור הסרטון קצר מדי (לפחות 8 תווים)');
+  }
+  const key = (settings.creative_gemini_api_key || '').trim();
+  if (!key) {
+    throw new Error('חסר מפתח Gemini — הגדירו CREATIVE_GEMINI_API_KEY או שמרו מפתח בהגדרות');
+  }
+  const model = (settings.creative_gemini_model || 'gemini-2.0-flash').trim();
+  const tone = getToneById('adults');
+  const block = userBlock({
+    videoDescription: vd,
+    toneId: tone.id,
+    userNotes: '',
+    toneHint: tone.hint,
+    productionPackText: null
+  });
+  const { brief, llmRawText, promptFullText, geminiHttpTraces } = await briefGemini({
+    apiKey: key,
+    model,
+    userBlock: block
+  });
+  return {
+    script: brief.narration || '',
+    model,
+    promptFullText,
+    llmRawText,
+    httpTrace: geminiHttpTraces || []
+  };
+}

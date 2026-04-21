@@ -13,7 +13,11 @@ import {
   getCreativeStudioSettings,
   CREATIVE_STUDIO_SETTING_KEYS
 } from '../services/creative/creativeStudioSettings.js';
-import { planCreativeVideo, briefJsonForPlanEditor } from '../services/creative/creativeScriptService.js';
+import {
+  planCreativeVideo,
+  briefJsonForPlanEditor,
+  generateGeminiScriptOnly
+} from '../services/creative/creativeScriptService.js';
 import scheduler from '../services/scheduler.js';
 
 const router = express.Router();
@@ -200,6 +204,18 @@ router.post('/plan', async (req, res) => {
     });
   } catch (e) {
     console.error('creative /plan:', e);
+    res.status(400).json({ error: e.message || String(e) });
+  }
+});
+
+router.post('/script-only', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const videoDescription = String(body.videoDescription || '').trim();
+    const settings = getCreativeStudioSettings();
+    const out = await generateGeminiScriptOnly(settings, { videoDescription });
+    res.json(out);
+  } catch (e) {
     res.status(400).json({ error: e.message || String(e) });
   }
 });
