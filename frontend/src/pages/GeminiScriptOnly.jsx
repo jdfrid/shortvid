@@ -23,7 +23,7 @@ export default function GeminiScriptOnly() {
     }
     setLoading(true);
     try {
-      const res = await api.geminiScriptOnly(videoDescription.trim());
+      const res = await api.mistralScriptOnly(videoDescription.trim());
       setScript(res.script || '');
       setRaw(res.llmRawText || '');
       setPrompt(res.promptFullText || '');
@@ -39,10 +39,10 @@ export default function GeminiScriptOnly() {
     <div className="glass rounded-xl p-6 space-y-4 max-w-4xl mx-auto" dir="rtl">
       <h1 className="text-xl font-semibold flex items-center gap-2">
         <Sparkles className="text-gold-400" size={22} />
-        Gemini Script Only
+        Mistral Script Only
       </h1>
       <p className="text-sm text-midnight-400">
-        מסך מינימלי: תיאור אחד, קריאה ל־Gemini, והצגת תסריט.
+        מסך מינימלי: תיאור אחד, קריאה ל־Mistral, והצגת תסריט.
       </p>
 
       {error ? (
@@ -66,11 +66,11 @@ export default function GeminiScriptOnly() {
         onClick={onGenerate}
       >
         <Sparkles size={18} />
-        {loading ? 'פונה ל-Gemini…' : 'צור תסריט'}
+        {loading ? 'פונה ל-Mistral…' : 'צור תסריט'}
       </button>
 
       <div>
-        <label className="block text-sm text-midnight-300 mb-1">התסריט שחזר מ־Gemini</label>
+        <label className="block text-sm text-midnight-300 mb-1">התסריט שחזר מ־Mistral</label>
         <textarea
           className="input-dark w-full min-h-[220px]"
           value={script}

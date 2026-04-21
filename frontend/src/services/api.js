@@ -117,7 +117,7 @@ class ApiService {
     return this.request('/creative/plan', { method: 'POST', body: JSON.stringify(body) });
   }
 
-  async geminiScriptOnly(videoDescription) {
+  async mistralScriptOnly(videoDescription) {
     return this.request('/creative/script-only', {
       method: 'POST',
       body: JSON.stringify({ videoDescription })

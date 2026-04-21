@@ -555,3 +555,109 @@ export async function generateGeminiScriptOnly(settings, { videoDescription }) {
     httpTrace: geminiHttpTraces || []
   };
 }
+
+function resolveMistralApiKey(settings) {
+  return String(
+    settings?.creative_mistral_api_key ||
+      process.env.CREATIVE_MISTRAL_API_KEY ||
+      process.env.MISTRAL_API_KEY ||
+      ''
+  ).trim();
+}
+
+function resolveMistralModel(settings) {
+  return String(settings?.creative_mistral_model || process.env.CREATIVE_MISTRAL_MODEL || 'mistral-small-latest').trim();
+}
+
+function extractMistralText(data) {
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map(p => {
+        if (typeof p === 'string') return p;
+        if (p && typeof p.text === 'string') return p.text;
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+  return '';
+}
+
+/**
+ * Minimal Mistral-only script generation:
+ * input text -> Mistral -> narration script text.
+ */
+export async function generateMistralScriptOnly(settings, { videoDescription }) {
+  const vd = String(videoDescription || '').trim();
+  if (vd.length < 8) {
+    throw new Error('תיאור הסרטון קצר מדי (לפחות 8 תווים)');
+  }
+
+  const apiKey = resolveMistralApiKey(settings);
+  if (!apiKey) {
+    throw new Error('חסר מפתח Mistral — הגדירו CREATIVE_MISTRAL_API_KEY בסביבת השרת');
+  }
+
+  const model = resolveMistralModel(settings);
+  const systemText =
+    'You are an expert short-video copywriter. Return only the final narration script text, with no JSON and no markdown.';
+  const userText = `Create a clear, engaging script for this video request:\n\n${vd}\n\nConstraints:\n- 80-130 words\n- keep it coherent and practical\n- same language as the user request`;
+
+  const url = 'https://api.mistral.ai/v1/chat/completions';
+  const body = {
+    model,
+    temperature: 0.7,
+    messages: [
+      { role: 'system', content: systemText },
+      { role: 'user', content: userText }
+    ]
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120000)
+  });
+
+  const raw = await res.text();
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    data = {};
+  }
+
+  const httpTrace = [
+    {
+      label: 'Mistral chat/completions',
+      url,
+      method: 'POST',
+      status: res.status,
+      request_body_preview: previewJson(body, 8000),
+      response_text_preview: (raw || '').slice(0, 8000)
+    }
+  ];
+
+  if (!res.ok) {
+    throw new Error(`Mistral error ${res.status}: ${(raw || '').slice(0, 450)}`);
+  }
+
+  const script = extractMistralText(data);
+  if (!script) throw new Error('Mistral returned empty script');
+
+  const promptFullText = `MISTRAL REQUEST\n--- SYSTEM ---\n${systemText}\n\n--- USER ---\n${userText}`;
+  return {
+    provider: 'mistral',
+    script,
+    model,
+    promptFullText,
+    llmRawText: raw || '',
+    httpTrace
+  };
+}

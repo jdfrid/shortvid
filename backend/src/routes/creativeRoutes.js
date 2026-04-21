@@ -16,7 +16,7 @@ import {
 import {
   planCreativeVideo,
   briefJsonForPlanEditor,
-  generateGeminiScriptOnly
+  generateMistralScriptOnly
 } from '../services/creative/creativeScriptService.js';
 import scheduler from '../services/scheduler.js';
 
@@ -213,7 +213,7 @@ router.post('/script-only', async (req, res) => {
     const body = req.body || {};
     const videoDescription = String(body.videoDescription || '').trim();
     const settings = getCreativeStudioSettings();
-    const out = await generateGeminiScriptOnly(settings, { videoDescription });
+    const out = await generateMistralScriptOnly(settings, { videoDescription });
     res.json(out);
   } catch (e) {
     res.status(400).json({ error: e.message || String(e) });
