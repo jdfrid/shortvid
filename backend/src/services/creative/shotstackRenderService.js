@@ -23,9 +23,12 @@ function baseUrl() {
 function candidateBaseUrls() {
   const first = baseUrl();
   const out = [first];
-  // If no explicit full URL override, always try both official environments.
-  // This avoids production-key vs sandbox-endpoint mismatches.
-  if (!(process.env.SHOTSTACK_BASE_URL || '').trim()) {
+  // Always include official prod/stage endpoints when using api.shotstack.io,
+  // even if SHOTSTACK_BASE_URL is set. This prevents env lock to wrong target.
+  if (/api\.shotstack\.io/i.test(first)) {
+    out.push('https://api.shotstack.io/edit/v1');
+    out.push('https://api.shotstack.io/edit/stage');
+  } else if (!(process.env.SHOTSTACK_BASE_URL || '').trim()) {
     out.push('https://api.shotstack.io/edit/v1');
     out.push('https://api.shotstack.io/edit/stage');
   }
