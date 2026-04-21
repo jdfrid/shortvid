@@ -10,7 +10,13 @@ function baseUrl() {
   const explicit = (process.env.SHOTSTACK_BASE_URL || '').trim().replace(/\/$/, '');
   if (explicit) return explicit;
   const host = (process.env.SHOTSTACK_HOST || 'api.shotstack.io').replace(/^https?:\/\//, '');
-  const ver = (process.env.SHOTSTACK_EDIT_VERSION || 'v1').trim();
+  let ver = (process.env.SHOTSTACK_EDIT_VERSION || 'v1').trim().replace(/^\/+|\/+$/g, '');
+  // Normalize common misconfigurations (e.g. "stage/edit/v1").
+  if (ver.includes('/')) {
+    if (ver.includes('stage')) ver = 'stage';
+    else ver = 'v1';
+  }
+  if (ver !== 'v1' && ver !== 'stage') ver = 'v1';
   return `https://${host}/edit/${ver}`;
 }
 
@@ -20,7 +26,6 @@ function candidateBaseUrls() {
   // If no explicit override, try common stage/prod endpoint variants.
   if (!(process.env.SHOTSTACK_BASE_URL || '').trim()) {
     out.push('https://api.shotstack.io/edit/stage');
-    out.push('https://api.shotstack.io/stage/edit/v1');
   }
   return [...new Set(out.map(s => String(s || '').trim().replace(/\/$/, '')).filter(Boolean))];
 }
