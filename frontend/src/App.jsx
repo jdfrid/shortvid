@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import CreativeStudio from './pages/CreativeStudio';
 import GeminiScriptOnly from './pages/GeminiScriptOnly';
 import ShotstackScriptVideoPage from './pages/ShotstackScriptVideoPage';
+import TavusScriptVideoPage from './pages/TavusScriptVideoPage';
 import { LogOut, Sparkles } from 'lucide-react';
 
 function ProtectedRoute({ children, roles }) {
@@ -98,7 +99,7 @@ export default function App() {
           element={
             <ProtectedRoute roles={['admin', 'editor']}>
               <StudioLayout>
-                <ShotstackScriptVideoPage />
+                <TavusScriptVideoPage />
               </StudioLayout>
             </ProtectedRoute>
           }
@@ -129,6 +130,16 @@ export default function App() {
             <ProtectedRoute roles={['admin', 'editor']}>
               <StudioLayout>
                 <ShotstackScriptVideoPage />
+              </StudioLayout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tavus-script"
+          element={
+            <ProtectedRoute roles={['admin', 'editor']}>
+              <StudioLayout>
+                <TavusScriptVideoPage />
               </StudioLayout>
             </ProtectedRoute>
           }

@@ -6,6 +6,7 @@ import { authenticateToken, requireRole } from '../middleware/auth.js';
 import * as authController from '../controllers/authController.js';
 import creativeRoutes from './creativeRoutes.js';
 import shotstackScriptRoutes from './shotstackScriptRoutes.js';
+import tavusScriptRoutes from './tavusScriptRoutes.js';
 import { prepare, getDataRoot } from '../config/database.js';
 
 const router = express.Router();
@@ -86,5 +87,6 @@ router.get('/creative/public-tts/:jobId', (req, res) => {
 
 router.use('/creative', authenticateToken, requireRole('admin', 'editor'), creativeRoutes);
 router.use('/shotstack-script', authenticateToken, requireRole('admin', 'editor'), shotstackScriptRoutes);
+router.use('/tavus-script', authenticateToken, requireRole('admin', 'editor'), tavusScriptRoutes);
 
 export default router;

@@ -142,6 +142,17 @@ class ApiService {
   async getShotstackScriptVideoJob(jobId) {
     return this.request(`/shotstack-script/jobs/${jobId}`);
   }
+
+  async createTavusScriptVideoJob(scriptText) {
+    return this.request('/tavus-script/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ scriptText })
+    });
+  }
+
+  async getTavusScriptVideoJob(jobId) {
+    return this.request(`/tavus-script/jobs/${jobId}`);
+  }
 }
 
 export default new ApiService();
