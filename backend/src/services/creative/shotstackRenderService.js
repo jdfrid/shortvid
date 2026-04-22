@@ -23,14 +23,11 @@ function baseUrl() {
 function candidateBaseUrls() {
   const first = baseUrl();
   const out = [first];
-  // Always include official prod/stage endpoints when using api.shotstack.io,
-  // even if SHOTSTACK_BASE_URL is set. This prevents env lock to wrong target.
+  // For api.shotstack.io prioritize production endpoint as deterministic fallback.
   if (/api\.shotstack\.io/i.test(first)) {
     out.push('https://api.shotstack.io/edit/v1');
-    out.push('https://api.shotstack.io/edit/stage');
   } else if (!(process.env.SHOTSTACK_BASE_URL || '').trim()) {
     out.push('https://api.shotstack.io/edit/v1');
-    out.push('https://api.shotstack.io/edit/stage');
   }
   return [...new Set(out.map(s => String(s || '').trim().replace(/\/$/, '')).filter(Boolean))];
 }
